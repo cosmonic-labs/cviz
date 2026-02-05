@@ -10,34 +10,39 @@ pub fn generate_ascii(graph: &CompositionGraph, detail: DetailLevel) -> String {
     }
 }
 
-/// Generate ASCII diagram showing only the HTTP handler chain
+/// Generate ASCII diagram showing only the HTTP handler chain (request flow direction)
 fn generate_handler_chain_ascii(graph: &CompositionGraph) -> String {
     let chain = graph.get_handler_chain();
 
     if chain.is_empty() {
-        return box_content("Middleware Chain", &["No HTTP handler chain found"]);
+        return box_content("Handler Chain", &["No HTTP handler chain found"]);
     }
 
     let mut lines = Vec::new();
 
-    // Build the chain lines
-    for (i, &idx) in chain.iter().enumerate() {
-        if let Some(node) = graph.get_node(idx) {
-            let label = node.display_label();
+    // Show export entry point
+    if let Some(&first_idx) = chain.first() {
+        if let Some(first_node) = graph.get_node(first_idx) {
+            lines.push(format!("[Export: handler] ──> {}", first_node.display_label()));
+        }
+    }
 
-            if i < chain.len() - 1 {
-                // Not the last node - show connection to next
-                if let Some(next_node) = graph.get_node(chain[i + 1]) {
-                    lines.push(format!("{} ──handler──> {}", label, next_node.display_label()));
-                }
-            } else {
-                // Last node - show export
-                lines.push(format!("{} ──> [Export: handler]", label));
+    // Build the chain lines in request flow order
+    for window in chain.windows(2) {
+        if let [from_idx, to_idx] = window {
+            if let (Some(from_node), Some(to_node)) =
+                (graph.get_node(*from_idx), graph.get_node(*to_idx))
+            {
+                lines.push(format!(
+                    "{} ──handler──> {}",
+                    from_node.display_label(),
+                    to_node.display_label()
+                ));
             }
         }
     }
 
-    box_content("Middleware Chain", &lines)
+    box_content("Handler Chain", &lines)
 }
 
 /// Generate ASCII diagram showing all interface connections
@@ -177,13 +182,20 @@ fn generate_full_ascii(graph: &CompositionGraph) -> String {
     output
 }
 
+/// Calculate the display width of a string (number of terminal columns).
+/// Uses char count instead of byte length to handle multi-byte Unicode
+/// characters like box-drawing characters (─) which are 3 bytes but 1 column.
+fn display_width(s: &str) -> usize {
+    s.chars().count()
+}
+
 /// Create a box around content with a title
 fn box_content(title: &str, lines: &[impl AsRef<str>]) -> String {
-    // Calculate the width needed
-    let title_width = title.len() + 2; // Add padding around title
+    // Calculate the width needed (in display columns, not bytes)
+    let title_width = display_width(title) + 2; // Add padding around title
     let max_line_width = lines
         .iter()
-        .map(|l| l.as_ref().len())
+        .map(|l| display_width(l.as_ref()))
         .max()
         .unwrap_or(0);
     let width = std::cmp::max(title_width, max_line_width) + 4; // Add padding
@@ -194,8 +206,9 @@ fn box_content(title: &str, lines: &[impl AsRef<str>]) -> String {
     output.push_str(&format!("┌{}┐\n", "─".repeat(width)));
 
     // Title line centered
-    let title_padding = (width - title.len()) / 2;
-    let title_padding_right = width - title.len() - title_padding;
+    let title_display = display_width(title);
+    let title_padding = (width - title_display) / 2;
+    let title_padding_right = width - title_display - title_padding;
     output.push_str(&format!(
         "│{}{}{}│\n",
         " ".repeat(title_padding),
@@ -209,7 +222,7 @@ fn box_content(title: &str, lines: &[impl AsRef<str>]) -> String {
     // Content lines
     for line in lines {
         let line_str = line.as_ref();
-        let padding = width.saturating_sub(line_str.len());
+        let padding = width.saturating_sub(display_width(line_str));
         output.push_str(&format!("│{}{}│\n", line_str, " ".repeat(padding)));
     }
 
@@ -268,11 +281,20 @@ mod tests {
         let graph = test_graph();
         let output = generate_ascii(&graph, DetailLevel::HandlerChain);
 
-        assert!(output.contains("Middleware Chain"), "should have title");
+        assert!(output.contains("Handler Chain"), "should have title");
         assert!(output.contains("srv"), "should show srv node");
         assert!(output.contains("middleware"), "should show middleware node");
         assert!(output.contains("handler"), "should show handler label");
-        assert!(output.contains("Export"), "should show export");
+        assert!(output.contains("Export"), "should show export at start");
+        // Request flow order: export → middleware → srv
+        assert!(
+            output.contains("[Export: handler] ──> middleware"),
+            "should show export pointing to outermost handler"
+        );
+        assert!(
+            output.contains("middleware ──handler──> srv"),
+            "should show request flow from middleware to srv"
+        );
     }
 
     #[test]
@@ -313,7 +335,7 @@ mod tests {
         let graph = CompositionGraph::new();
 
         let chain = generate_ascii(&graph, DetailLevel::HandlerChain);
-        assert!(chain.contains("No HTTP handler chain found"));
+        assert!(chain.contains("No HTTP handler chain found"), "{}", chain);
 
         let all = generate_ascii(&graph, DetailLevel::AllInterfaces);
         assert!(all.contains("No component instances found"));

@@ -10,7 +10,7 @@ pub fn generate_mermaid(graph: &CompositionGraph, detail: DetailLevel, direction
     }
 }
 
-/// Generate a diagram showing only the HTTP handler chain
+/// Generate a diagram showing only the HTTP handler chain (request flow direction)
 fn generate_handler_chain(graph: &CompositionGraph, direction: Direction) -> String {
     let mut output = String::new();
     output.push_str(&format!("graph {}\n", direction.to_mermaid()));
@@ -22,8 +22,8 @@ fn generate_handler_chain(graph: &CompositionGraph, direction: Direction) -> Str
         return output;
     }
 
-    // Add subgraph for the middleware chain
-    output.push_str("    subgraph composition[\"Middleware Chain\"]\n");
+    // Add subgraph for the handler chain
+    output.push_str("    subgraph composition[\"Handler Chain\"]\n");
 
     for &idx in &chain {
         if let Some(node) = graph.get_node(idx) {
@@ -35,7 +35,17 @@ fn generate_handler_chain(graph: &CompositionGraph, direction: Direction) -> Str
 
     output.push_str("    end\n\n");
 
-    // Add connections between chain elements
+    // Add export entry point
+    if let Some(&first_idx) = chain.first() {
+        if let Some(first_node) = graph.get_node(first_idx) {
+            output.push_str(&format!(
+                "    export([\"Export: handler\"]) --> {}\n",
+                sanitize_for_mermaid(&first_node.name)
+            ));
+        }
+    }
+
+    // Add connections between chain elements in request flow order
     for window in chain.windows(2) {
         if let [from_idx, to_idx] = window {
             if let (Some(from_node), Some(to_node)) = (graph.get_node(*from_idx), graph.get_node(*to_idx)) {
@@ -45,16 +55,6 @@ fn generate_handler_chain(graph: &CompositionGraph, direction: Direction) -> Str
                     sanitize_for_mermaid(&to_node.name)
                 ));
             }
-        }
-    }
-
-    // Add export indicator
-    if let Some(&last_idx) = chain.last() {
-        if let Some(last_node) = graph.get_node(last_idx) {
-            output.push_str(&format!(
-                "    {} --> export([\"Export: handler\"])\n",
-                sanitize_for_mermaid(&last_node.name)
-            ));
         }
     }
 
@@ -232,12 +232,21 @@ mod tests {
         let graph = test_graph();
         let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight);
 
-        assert!(output.starts_with("graph LR\n"), "should start with graph direction");
+        assert!(
+            output.starts_with("graph LR\n"),
+            "should start with graph direction"
+        );
         assert!(output.contains("subgraph composition"), "should have subgraph");
+        assert!(output.contains("Handler Chain"), "should have Handler Chain title");
         assert!(output.contains("srv"), "should show srv node");
         assert!(output.contains("middleware"), "should show middleware node");
         assert!(output.contains("-->|\"handler\"|"), "should have handler edge");
-        assert!(output.contains("export"), "should have export node");
+        // Export should point to the first (outermost) node
+        assert!(
+            output.contains("export([\"Export: handler\"]) --> middleware"),
+            "export should point to outermost handler, got:\n{}",
+            output
+        );
     }
 
     #[test]

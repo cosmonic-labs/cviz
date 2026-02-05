@@ -111,7 +111,9 @@ impl CompositionGraph {
         interfaces.into_iter().collect()
     }
 
-    /// Get all nodes that have the HTTP handler interface as an import
+    /// Get the HTTP handler chain in request-flow order (outermost → innermost).
+    /// The first element is the exported handler (entry point for requests),
+    /// and the last element is the innermost handler (imports from host).
     pub fn get_handler_chain(&self) -> Vec<u32> {
         let mut chain = Vec::new();
 
@@ -123,7 +125,7 @@ impl CompositionGraph {
             .map(|(_, idx)| *idx);
 
         if let Some(start) = export_instance {
-            // Walk backward through the chain
+            // Walk from export through the chain following handler imports
             let mut current = Some(start);
             let mut visited = std::collections::HashSet::new();
 
@@ -144,7 +146,6 @@ impl CompositionGraph {
             }
         }
 
-        chain.reverse();
         chain
     }
 }

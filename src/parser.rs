@@ -279,26 +279,36 @@ mod tests {
         let chain = graph.get_handler_chain();
         assert_eq!(chain.len(), 2, "expected 2 nodes in handler chain");
 
-        // First node should import from host
+        // Chain is in request-flow order: outermost (export) first, innermost last
+        // First node is the export point (outermost handler)
         let first = graph.get_node(chain[0]).expect("first chain node");
         assert!(
-            first.imports.iter().any(|i| i.is_host_import && i.is_http_handler()),
-            "first chain node should have host handler import"
+            first
+                .imports
+                .iter()
+                .any(|i| !i.is_host_import && i.is_http_handler()),
+            "first chain node (outermost) should import handler from another component"
         );
 
-        // Second node should import from first (not host)
-        let second = graph.get_node(chain[1]).expect("second chain node");
+        // Last node imports from host (innermost handler)
+        let last = graph.get_node(chain[1]).expect("last chain node");
         assert!(
-            second.imports.iter().any(|i| !i.is_host_import && i.is_http_handler()),
-            "second chain node should have non-host handler import"
+            last.imports
+                .iter()
+                .any(|i| i.is_host_import && i.is_http_handler()),
+            "last chain node (innermost) should import handler from host"
         );
 
-        // Second node's handler source should resolve to first node
-        let second_handler = second.imports.iter().find(|i| i.is_http_handler()).unwrap();
+        // First node's handler source should be the last node
+        let first_handler = first
+            .imports
+            .iter()
+            .find(|i| i.is_http_handler())
+            .unwrap();
         assert_eq!(
-            second_handler.source_instance,
-            Some(chain[0]),
-            "second node's handler source should be the first chain node"
+            first_handler.source_instance,
+            Some(chain[1]),
+            "first node's handler source should be the last chain node"
         );
     }
 
