@@ -14,7 +14,7 @@ use output::{DetailLevel, Direction, OutputFormat};
 #[derive(Parser, Debug)]
 #[command(name = "cviz")]
 #[command(about = "Visualize WebAssembly component composition")]
-#[command(version)]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("CVIZ_GIT_SHA"), ") with wasmparser ", env!("WASMPARSER_VERSION")))]
 struct Args {
     /// Path to the .wasm component file
     #[arg(value_name = "FILE")]
