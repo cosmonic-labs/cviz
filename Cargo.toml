@@ -20,7 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-wasmparser = { version = "0.244", features = ["component-model"] }
+wirm = { path = "../../research/compilers/wirm-COMP/wirm" }
 anyhow = "1.0"
 serde_json = "1.0.149"
 serde = { version = "1.0.228", features = ["derive"] }
