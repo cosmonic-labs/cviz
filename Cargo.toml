@@ -8,6 +8,8 @@ license = "Apache-2.0 WITH LLVM-exception"
 clap = { version = "4", features = ["derive"] }
 wasmparser = { version = "0.244", features = ["component-model"] }
 anyhow = "1.0"
+serde_json = "1.0.149"
+serde = { version = "1.0.228", features = ["derive"] }
 
 [dev-dependencies]
 wat = "1"

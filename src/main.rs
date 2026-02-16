@@ -3,6 +3,7 @@ mod mermaid;
 mod model;
 mod output;
 mod parser;
+mod json;
 
 use std::path::PathBuf;
 
@@ -64,6 +65,7 @@ fn main() -> Result<()> {
     let diagram = match args.format {
         OutputFormat::Ascii => ascii::generate_ascii(&graph, args.detail),
         OutputFormat::Mermaid => mermaid::generate_mermaid(&graph, args.detail, args.direction),
+        OutputFormat::Json => json::generate_json(&graph)?, // always generates the full graph
     };
 
     // Output

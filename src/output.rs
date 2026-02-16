@@ -4,6 +4,7 @@ pub enum OutputFormat {
     #[default]
     Ascii,
     Mermaid,
+    Json
 }
 
 impl std::str::FromStr for OutputFormat {
@@ -13,7 +14,8 @@ impl std::str::FromStr for OutputFormat {
         match s.to_lowercase().as_str() {
             "ascii" => Ok(OutputFormat::Ascii),
             "mermaid" => Ok(OutputFormat::Mermaid),
-            _ => Err(format!("Invalid output format: {}. Valid values: ascii, mermaid", s)),
+            "json" => Ok(OutputFormat::Json),
+            _ => Err(format!("Invalid output format: {}. Valid values: ascii, mermaid, json", s)),
         }
     }
 }
@@ -80,6 +82,7 @@ mod tests {
     fn test_output_format_parse() {
         assert!(matches!("ascii".parse::<OutputFormat>().unwrap(), OutputFormat::Ascii));
         assert!(matches!("mermaid".parse::<OutputFormat>().unwrap(), OutputFormat::Mermaid));
+        assert!(matches!("json".parse::<OutputFormat>().unwrap(), OutputFormat::Json));
         assert!("invalid".parse::<OutputFormat>().is_err());
     }
 
