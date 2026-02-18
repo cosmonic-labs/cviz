@@ -6,7 +6,7 @@ license = "Apache-2.0 WITH LLVM-exception"
 
 [lib]
 name = "cviz"
-path = "src/lib.rs"
+path = "src/lib/lib.rs"
 
 [[bin]]
 name = "cviz"
