@@ -3,6 +3,12 @@ name = "cviz"
 version = "1.0.0"
 edition = "2021"
 license = "Apache-2.0 WITH LLVM-exception"
+authors = ["Bailey Hayes", "Elizabeth Gilbert"]
+description = "A CLI tool to visualize WebAssembly component composition structure."
+readme = "README.md"
+repository = "https://github.com/cosmonic-labs/cviz"
+categories = ["wasm"]
+keywords = ["wasm", "WebAssembly", "visualization"]
 
 [lib]
 name = "cviz"
