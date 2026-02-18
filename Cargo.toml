@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0 WITH LLVM-exception"
 
+[lib]
+name = "cviz"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cviz"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 wasmparser = { version = "0.244", features = ["component-model"] }
