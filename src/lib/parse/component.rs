@@ -159,12 +159,11 @@ pub fn parse_component(bytes: &[u8]) -> Result<CompositionGraph> {
     }
 
     // Mark host imports on the connections
-    // Instances 0 to (first component instance - 1) are imports from the host
-    let first_component_instance = instance_index_map.first().copied().unwrap_or(0);
-
+    // Imports that aren't from a node inside the component graph are actually imported from the host.
+    let all_node_inst_ids = graph.nodes.keys().copied().collect::<Vec<_>>();
     for node in graph.nodes.values_mut() {
         for import in &mut node.imports {
-            if import.source_instance < first_component_instance {
+            if !all_node_inst_ids.contains(&import.source_instance) {
                 import.is_host_import = true;
             }
         }
