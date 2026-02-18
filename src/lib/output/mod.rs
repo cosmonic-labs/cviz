@@ -21,7 +21,10 @@ impl std::str::FromStr for OutputFormat {
             "mermaid" => Ok(OutputFormat::Mermaid),
             "json" => Ok(OutputFormat::Json),
             "json-pretty" => Ok(OutputFormat::JsonPretty),
-            _ => Err(format!("Invalid output format: {}. Valid values: ascii, mermaid, json, json-pretty", s)),
+            _ => Err(format!(
+                "Invalid output format: {}. Valid values: ascii, mermaid, json, json-pretty",
+                s
+            )),
         }
     }
 }
@@ -86,22 +89,46 @@ mod tests {
 
     #[test]
     fn test_output_format_parse() {
-        assert!(matches!("ascii".parse::<OutputFormat>().unwrap(), OutputFormat::Ascii));
-        assert!(matches!("mermaid".parse::<OutputFormat>().unwrap(), OutputFormat::Mermaid));
-        assert!(matches!("json".parse::<OutputFormat>().unwrap(), OutputFormat::Json));
+        assert!(matches!(
+            "ascii".parse::<OutputFormat>().unwrap(),
+            OutputFormat::Ascii
+        ));
+        assert!(matches!(
+            "mermaid".parse::<OutputFormat>().unwrap(),
+            OutputFormat::Mermaid
+        ));
+        assert!(matches!(
+            "json".parse::<OutputFormat>().unwrap(),
+            OutputFormat::Json
+        ));
         assert!("invalid".parse::<OutputFormat>().is_err());
     }
 
     #[test]
     fn test_direction_parse() {
-        assert!(matches!("lr".parse::<Direction>().unwrap(), Direction::LeftToRight));
-        assert!(matches!("td".parse::<Direction>().unwrap(), Direction::TopDown));
+        assert!(matches!(
+            "lr".parse::<Direction>().unwrap(),
+            Direction::LeftToRight
+        ));
+        assert!(matches!(
+            "td".parse::<Direction>().unwrap(),
+            Direction::TopDown
+        ));
     }
 
     #[test]
     fn test_detail_level_parse() {
-        assert!(matches!("handler-chain".parse::<DetailLevel>().unwrap(), DetailLevel::HandlerChain));
-        assert!(matches!("all-interfaces".parse::<DetailLevel>().unwrap(), DetailLevel::AllInterfaces));
-        assert!(matches!("full".parse::<DetailLevel>().unwrap(), DetailLevel::Full));
+        assert!(matches!(
+            "handler-chain".parse::<DetailLevel>().unwrap(),
+            DetailLevel::HandlerChain
+        ));
+        assert!(matches!(
+            "all-interfaces".parse::<DetailLevel>().unwrap(),
+            DetailLevel::AllInterfaces
+        ));
+        assert!(matches!(
+            "full".parse::<DetailLevel>().unwrap(),
+            DetailLevel::Full
+        ));
     }
 }

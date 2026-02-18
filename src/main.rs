@@ -57,7 +57,9 @@ fn main() -> Result<()> {
     // Generate the diagram based on format
     let diagram = match args.format {
         OutputFormat::Ascii => output::ascii::generate_ascii(&graph, args.detail),
-        OutputFormat::Mermaid => output::mermaid::generate_mermaid(&graph, args.detail, args.direction),
+        OutputFormat::Mermaid => {
+            output::mermaid::generate_mermaid(&graph, args.detail, args.direction)
+        }
         OutputFormat::Json => output::json::generate_json(&graph, false)?, // always generates the full graph
         OutputFormat::JsonPretty => output::json::generate_json(&graph, true)?, // always generates the full graph
     };

@@ -24,7 +24,10 @@ fn generate_handler_chain_ascii(graph: &CompositionGraph) -> String {
     // Show export entry point
     if let Some(&first_idx) = chain.first() {
         if let Some(first_node) = graph.get_node(first_idx) {
-            lines.push(format!("[Export: handler] ──> {}", first_node.display_label()));
+            lines.push(format!(
+                "[Export: handler] ──> {}",
+                first_node.display_label()
+            ));
         }
     }
 
@@ -134,7 +137,11 @@ fn generate_full_ascii(graph: &CompositionGraph) -> String {
         let label = if node.component_index == SYNTHETIC_COMPONENT {
             format!("  [{}] (synthetic)", node.display_label())
         } else {
-            format!("  [{}] [comp:{}]", node.display_label(), node.component_index)
+            format!(
+                "  [{}] [comp:{}]",
+                node.display_label(),
+                node.component_index
+            )
         };
         instance_lines.push(label);
     }
@@ -233,8 +240,8 @@ fn box_content(title: &str, lines: &[impl AsRef<str>]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{ComponentNode, InterfaceConnection};
     use super::*;
+    use crate::model::{ComponentNode, InterfaceConnection};
 
     /// Build a graph: host → $srv → $middleware → export(handler)
     fn test_graph() -> CompositionGraph {
@@ -302,17 +309,26 @@ mod tests {
         let output = generate_ascii(&graph, DetailLevel::AllInterfaces);
 
         // Host imports section
-        assert!(output.contains("Host Imports"), "should have host imports section");
+        assert!(
+            output.contains("Host Imports"),
+            "should have host imports section"
+        );
         assert!(output.contains("handler"), "should show handler interface");
         assert!(output.contains("log"), "should show log interface");
 
         // Component instances section
-        assert!(output.contains("Component Instances"), "should list instances");
+        assert!(
+            output.contains("Component Instances"),
+            "should list instances"
+        );
         assert!(output.contains("srv"), "should show srv");
         assert!(output.contains("middleware"), "should show middleware");
 
         // Connections section
-        assert!(output.contains("Connections"), "should have connections section");
+        assert!(
+            output.contains("Connections"),
+            "should have connections section"
+        );
         assert!(output.contains("Export"), "should show export");
     }
 
@@ -321,11 +337,17 @@ mod tests {
         let graph = test_graph();
         let output = generate_ascii(&graph, DetailLevel::Full);
 
-        assert!(output.contains("All Instances"), "should have instances section");
+        assert!(
+            output.contains("All Instances"),
+            "should have instances section"
+        );
         assert!(output.contains("srv"), "should show srv");
         assert!(output.contains("middleware"), "should show middleware");
         // Full mode shows full interface names
-        assert!(output.contains("wasi:http/handler@0.3.0"), "should show full interface name");
+        assert!(
+            output.contains("wasi:http/handler@0.3.0"),
+            "should show full interface name"
+        );
         assert!(output.contains("Connections"), "should have connections");
     }
 

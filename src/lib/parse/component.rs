@@ -54,11 +54,9 @@ pub fn parse_component(bytes: &[u8]) -> Result<CompositionGraph> {
             Payload::CustomSection(reader) => {
                 if let KnownCustom::ComponentName(name_reader) = reader.as_known() {
                     for subsection in name_reader {
-                        if let Ok(wasmparser::ComponentName::Instances(names)) = subsection
-                        {
+                        if let Ok(wasmparser::ComponentName::Instances(names)) = subsection {
                             for naming in names.into_iter().flatten() {
-                                instance_names
-                                    .insert(naming.index, naming.name.to_string());
+                                instance_names.insert(naming.index, naming.name.to_string());
                             }
                         }
                     }
@@ -198,8 +196,8 @@ fn resolve_alias(idx: u32, alias_to_source: &HashMap<u32, u32>) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use crate::{get_chain_for, is_connection_for};
     use super::*;
+    use crate::{get_chain_for, is_connection_for};
 
     /// WAT for a composed component with two middleware instances chained via wasi:http/handler.
     ///
@@ -256,7 +254,9 @@ mod tests {
         let http_interface = "wasi:http/handler";
         for node in &real_nodes {
             assert!(
-                node.imports.iter().any(|i| is_connection_for(i, http_interface)),
+                node.imports
+                    .iter()
+                    .any(|i| is_connection_for(i, http_interface)),
                 "node '{}' should have a handler import",
                 node.name
             );
@@ -264,7 +264,10 @@ mod tests {
 
         // Should have an export for the handler
         assert!(
-            graph.component_exports.keys().any(|k| k.contains(http_interface)),
+            graph
+                .component_exports
+                .keys()
+                .any(|k| k.contains(http_interface)),
             "expected handler export"
         );
     }
@@ -305,8 +308,7 @@ mod tests {
             .find(|i| is_connection_for(i, http_interface))
             .unwrap();
         assert_eq!(
-            first_handler.source_instance,
-            chain[1],
+            first_handler.source_instance, chain[1],
             "first node's handler source should be the last chain node"
         );
     }
@@ -318,7 +320,9 @@ mod tests {
 
         let host_interfaces = graph.host_interfaces();
         assert!(
-            host_interfaces.iter().any(|i| i.contains("wasi:http/handler")),
+            host_interfaces
+                .iter()
+                .any(|i| i.contains("wasi:http/handler")),
             "expected host handler interface, got: {:?}",
             host_interfaces
         );

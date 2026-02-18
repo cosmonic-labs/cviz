@@ -82,7 +82,8 @@ impl CompositionGraph {
     }
 
     pub fn add_export(&mut self, interface_name: String, source_instance: u32) {
-        self.component_exports.insert(interface_name, source_instance);
+        self.component_exports
+            .insert(interface_name, source_instance);
     }
 
     /// Get all real (non-synthetic) component nodes
@@ -151,8 +152,10 @@ mod tests {
 
     #[test]
     fn test_interface_short_label() {
-        let conn =
-            InterfaceConnection::from_instance("wasi:http/handler@0.3.0-rc-2026-01-06".to_string(), 0);
+        let conn = InterfaceConnection::from_instance(
+            "wasi:http/handler@0.3.0-rc-2026-01-06".to_string(),
+            0,
+        );
         assert_eq!(conn.short_label(), "handler");
 
         let conn2 = InterfaceConnection::from_instance("wasi:io/streams@0.2.0".to_string(), 1);

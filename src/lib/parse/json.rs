@@ -1,7 +1,7 @@
-use std::fs::File;
-use serde::de::Error;
 use crate::model::{ComponentNode, CompositionGraph, InterfaceConnection};
 use crate::output::json::JsonCompositionGraph;
+use serde::de::Error;
+use std::fs::File;
 
 pub fn parse_json(json_reader: &File) -> anyhow::Result<CompositionGraph> {
     let graph = CompositionGraph::from_json_reader(json_reader)?;
@@ -24,9 +24,7 @@ impl CompositionGraph {
         let model: JsonCompositionGraph = serde_json::from_str(input)?;
         Ok(Self::from_json_model(model))
     }
-    fn from_json_reader<R: std::io::Read>(
-        reader: R,
-    ) -> Result<Self, serde_json::Error> {
+    fn from_json_reader<R: std::io::Read>(reader: R) -> Result<Self, serde_json::Error> {
         let model: JsonCompositionGraph = serde_json::from_reader(reader)?;
         Ok(Self::from_json_model(model))
     }

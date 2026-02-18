@@ -3,7 +3,11 @@ use crate::model::{short_interface_name, CompositionGraph, SYNTHETIC_COMPONENT};
 use crate::output::{DetailLevel, Direction};
 
 /// Generate a Mermaid diagram from the composition graph
-pub fn generate_mermaid(graph: &CompositionGraph, detail: DetailLevel, direction: Direction) -> String {
+pub fn generate_mermaid(
+    graph: &CompositionGraph,
+    detail: DetailLevel,
+    direction: Direction,
+) -> String {
     match detail {
         DetailLevel::HandlerChain => generate_handler_chain(graph, direction),
         DetailLevel::AllInterfaces => generate_all_interfaces(graph, direction),
@@ -49,7 +53,9 @@ fn generate_handler_chain(graph: &CompositionGraph, direction: Direction) -> Str
     // Add connections between chain elements in request flow order
     for window in chain.windows(2) {
         if let [from_idx, to_idx] = window {
-            if let (Some(from_node), Some(to_node)) = (graph.get_node(*from_idx), graph.get_node(*to_idx)) {
+            if let (Some(from_node), Some(to_node)) =
+                (graph.get_node(*from_idx), graph.get_node(*to_idx))
+            {
                 output.push_str(&format!(
                     "    {} -->|\"handler\"| {}\n",
                     sanitize_for_mermaid(&from_node.name),
@@ -250,11 +256,20 @@ mod tests {
             output.starts_with("graph LR\n"),
             "should start with graph direction"
         );
-        assert!(output.contains("subgraph composition"), "should have subgraph");
-        assert!(output.contains("Handler Chain"), "should have Handler Chain title");
+        assert!(
+            output.contains("subgraph composition"),
+            "should have subgraph"
+        );
+        assert!(
+            output.contains("Handler Chain"),
+            "should have Handler Chain title"
+        );
         assert!(output.contains("srv"), "should show srv node");
         assert!(output.contains("middleware"), "should show middleware node");
-        assert!(output.contains("-->|\"handler\"|"), "should have handler edge");
+        assert!(
+            output.contains("-->|\"handler\"|"),
+            "should have handler edge"
+        );
         // Export should point to the first (outermost) node
         assert!(
             output.contains("export([\"Export: handler\"]) --> middleware"),
@@ -270,13 +285,25 @@ mod tests {
 
         assert!(output.starts_with("graph LR\n"));
         // Host imports subgraph
-        assert!(output.contains("subgraph host"), "should have host subgraph");
-        assert!(output.contains("handler"), "should show handler host import");
+        assert!(
+            output.contains("subgraph host"),
+            "should have host subgraph"
+        );
+        assert!(
+            output.contains("handler"),
+            "should show handler host import"
+        );
         assert!(output.contains("log"), "should show log host import");
         // Component instances subgraph
-        assert!(output.contains("subgraph composition"), "should have composition subgraph");
+        assert!(
+            output.contains("subgraph composition"),
+            "should have composition subgraph"
+        );
         // Connections
-        assert!(output.contains("-.->"), "should have dashed host import edges");
+        assert!(
+            output.contains("-.->"),
+            "should have dashed host import edges"
+        );
         assert!(output.contains("-->|"), "should have solid instance edges");
         // Export
         assert!(output.contains("Export"), "should have export");
@@ -288,9 +315,15 @@ mod tests {
         let output = generate_mermaid(&graph, DetailLevel::Full, Direction::TopDown);
 
         assert!(output.starts_with("graph TD\n"), "should use TD direction");
-        assert!(output.contains("subgraph all"), "should have all-instances subgraph");
+        assert!(
+            output.contains("subgraph all"),
+            "should have all-instances subgraph"
+        );
         // Full mode uses full interface names for connections where source exists
-        assert!(output.contains("wasi:http/handler@0.3.0"), "should show full interface name");
+        assert!(
+            output.contains("wasi:http/handler@0.3.0"),
+            "should show full interface name"
+        );
     }
 
     #[test]
@@ -311,4 +344,3 @@ mod tests {
         assert_eq!(sanitize_for_mermaid("instance_0"), "instance_0");
     }
 }
-

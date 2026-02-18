@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::model::CompositionGraph;
+use serde::{Deserialize, Serialize};
 
 /// Generate JSON from the composition graph
 pub fn generate_json(graph: &CompositionGraph, pretty: bool) -> Result<String, serde_json::Error> {
@@ -12,30 +12,40 @@ pub fn generate_json(graph: &CompositionGraph, pretty: bool) -> Result<String, s
 }
 
 fn generate_json_model(graph: &CompositionGraph) -> JsonCompositionGraph {
-    let nodes = graph.nodes.iter().map(|(id, node)| {
-        JsonNode {
+    let nodes = graph
+        .nodes
+        .iter()
+        .map(|(id, node)| JsonNode {
             id: *id,
             name: node.display_label().to_string(),
             component_index: node.component_index,
-            imports: node.imports.iter().map(|conn| {
-                JsonInterfaceConnection {
+            imports: node
+                .imports
+                .iter()
+                .map(|conn| JsonInterfaceConnection {
                     interface: conn.interface_name.clone(),
                     short: conn.short_label(),
                     source_instance: conn.source_instance,
                     is_host_import: conn.is_host_import,
-                }
-            }).collect(),
-        }
-    }).collect();
+                })
+                .collect(),
+        })
+        .collect();
 
-    let exports = graph.component_exports.iter().map(|(iface, src)| {
-        JsonExport {
+    let exports = graph
+        .component_exports
+        .iter()
+        .map(|(iface, src)| JsonExport {
             interface: iface.clone(),
             source_instance: *src,
-        }
-    }).collect();
+        })
+        .collect();
 
-    JsonCompositionGraph { version: 1, nodes, exports }
+    JsonCompositionGraph {
+        version: 1,
+        nodes,
+        exports,
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -110,7 +120,10 @@ mod tests {
         assert!(output.contains("srv"), "should show srv");
         assert!(output.contains("middleware"), "should show middleware");
         // Full mode shows full interface names
-        assert!(output.contains("wasi:http/handler@0.3.0"), "should show full interface name");
+        assert!(
+            output.contains("wasi:http/handler@0.3.0"),
+            "should show full interface name"
+        );
     }
 
     #[test]

@@ -1,8 +1,8 @@
 use crate::model::{CompositionGraph, InterfaceConnection};
 
-pub mod parse;
 pub mod model;
 pub mod output;
+pub mod parse;
 
 /// Check if this is the connection for a specific interface
 pub fn is_connection_for(conn: &InterfaceConnection, interface_name: &str) -> bool {
