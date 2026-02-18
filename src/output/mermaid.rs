@@ -1,4 +1,5 @@
-use crate::model::{sanitize_for_mermaid, short_interface_name, CompositionGraph, SYNTHETIC_COMPONENT};
+use crate::get_chain_for;
+use crate::model::{short_interface_name, CompositionGraph, SYNTHETIC_COMPONENT};
 use crate::output::{DetailLevel, Direction};
 
 /// Generate a Mermaid diagram from the composition graph
@@ -15,7 +16,7 @@ fn generate_handler_chain(graph: &CompositionGraph, direction: Direction) -> Str
     let mut output = String::new();
     output.push_str(&format!("graph {}\n", direction.to_mermaid()));
 
-    let chain = graph.get_handler_chain();
+    let chain = get_chain_for(graph, "wasi:http/handler");
 
     if chain.is_empty() {
         output.push_str("    empty[\"No HTTP handler chain found\"]\n");
@@ -124,7 +125,7 @@ fn generate_all_interfaces(graph: &CompositionGraph, direction: Direction) -> St
     }
 
     // Add exports
-    output.push_str("\n");
+    output.push('\n');
     for (export_name, source_idx) in &graph.component_exports {
         if let Some(node) = graph.get_node(*source_idx) {
             if node.component_index != SYNTHETIC_COMPONENT {
@@ -149,7 +150,7 @@ fn generate_full(graph: &CompositionGraph, direction: Direction) -> String {
 
     // Show all nodes including synthetic ones
     output.push_str("    subgraph all[\"All Instances\"]\n");
-    for (_idx, node) in &graph.nodes {
+    for node in graph.nodes.values() {
         let id = sanitize_for_mermaid(&node.name);
         let label = if node.component_index == SYNTHETIC_COMPONENT {
             format!("{} (synthetic)", node.display_label())
@@ -177,7 +178,7 @@ fn generate_full(graph: &CompositionGraph, direction: Direction) -> String {
     }
 
     // Show all exports
-    output.push_str("\n");
+    output.push('\n');
     for (export_name, source_idx) in &graph.component_exports {
         if let Some(node) = graph.get_node(*source_idx) {
             output.push_str(&format!(
@@ -190,6 +191,21 @@ fn generate_full(graph: &CompositionGraph, direction: Direction) -> String {
     }
 
     output
+}
+
+/// Sanitize a string for use as a Mermaid node ID
+fn sanitize_for_mermaid(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_start_matches('_')
+        .to_string()
 }
 
 #[cfg(test)]
@@ -288,6 +304,13 @@ mod tests {
 
         let all = generate_mermaid(&graph, DetailLevel::AllInterfaces, Direction::LeftToRight);
         assert!(all.contains("No component instances found"));
+    }
+
+    #[test]
+    fn test_sanitize_for_mermaid() {
+        assert_eq!(sanitize_for_mermaid("$srv"), "srv");
+        assert_eq!(sanitize_for_mermaid("mdl-a"), "mdl_a");
+        assert_eq!(sanitize_for_mermaid("instance_0"), "instance_0");
     }
 }
 

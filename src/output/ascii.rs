@@ -1,3 +1,4 @@
+use crate::get_chain_for;
 use crate::model::{short_interface_name, CompositionGraph, SYNTHETIC_COMPONENT};
 use crate::output::DetailLevel;
 
@@ -12,7 +13,7 @@ pub fn generate_ascii(graph: &CompositionGraph, detail: DetailLevel) -> String {
 
 /// Generate ASCII diagram showing only the HTTP handler chain (request flow direction)
 fn generate_handler_chain_ascii(graph: &CompositionGraph) -> String {
-    let chain = graph.get_handler_chain();
+    let chain = get_chain_for(graph, "wasi:http/handler");
 
     if chain.is_empty() {
         return box_content("Handler Chain", &["No HTTP handler chain found"]);
@@ -131,7 +132,7 @@ fn generate_full_ascii(graph: &CompositionGraph) -> String {
 
     // All instances section
     let mut instance_lines = Vec::new();
-    for (_idx, node) in &graph.nodes {
+    for node in graph.nodes.values() {
         let label = if node.component_index == SYNTHETIC_COMPONENT {
             format!("  [{}] (synthetic)", node.display_label())
         } else {
@@ -234,8 +235,8 @@ fn box_content(title: &str, lines: &[impl AsRef<str>]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::model::{ComponentNode, InterfaceConnection};
+    use super::*;
 
     /// Build a graph: host → $srv → $middleware → export(handler)
     fn test_graph() -> CompositionGraph {

@@ -1,53 +1,51 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use crate::model::CompositionGraph;
 
 /// Generate JSON from the composition graph
-pub fn generate_json(graph: &CompositionGraph) -> Result<String, serde_json::Error> {
-    graph.to_pretty_json()
-}
-
-impl CompositionGraph {
-    pub fn to_json_model(&self) -> JsonCompositionGraph {
-        let nodes = self.nodes.iter().map(|(id, node)| {
-            JsonNode {
-                id: *id,
-                name: node.display_label().to_string(),
-                component_index: node.component_index,
-                imports: node.imports.iter().map(|conn| {
-                    JsonInterfaceConnection {
-                        interface: conn.interface_name.clone(),
-                        short: conn.short_label(),
-                        source_instance: conn.source_instance,
-                        is_host_import: conn.is_host_import,
-                    }
-                }).collect(),
-            }
-        }).collect();
-
-        let exports = self.component_exports.iter().map(|(iface, src)| {
-            JsonExport {
-                interface: iface.clone(),
-                source_instance: *src,
-            }
-        }).collect();
-
-        JsonCompositionGraph { version: 1, nodes, exports }
-    }
-    pub fn to_pretty_json(&self) -> Result<String, serde_json::Error> {
-        let model = self.to_json_model();
+pub fn generate_json(graph: &CompositionGraph, pretty: bool) -> Result<String, serde_json::Error> {
+    let model = generate_json_model(graph);
+    if pretty {
         serde_json::to_string_pretty(&model)
+    } else {
+        serde_json::to_string(&model)
     }
 }
 
+fn generate_json_model(graph: &CompositionGraph) -> JsonCompositionGraph {
+    let nodes = graph.nodes.iter().map(|(id, node)| {
+        JsonNode {
+            id: *id,
+            name: node.display_label().to_string(),
+            component_index: node.component_index,
+            imports: node.imports.iter().map(|conn| {
+                JsonInterfaceConnection {
+                    interface: conn.interface_name.clone(),
+                    short: conn.short_label(),
+                    source_instance: conn.source_instance,
+                    is_host_import: conn.is_host_import,
+                }
+            }).collect(),
+        }
+    }).collect();
 
-#[derive(Serialize)]
+    let exports = graph.component_exports.iter().map(|(iface, src)| {
+        JsonExport {
+            interface: iface.clone(),
+            source_instance: *src,
+        }
+    }).collect();
+
+    JsonCompositionGraph { version: 1, nodes, exports }
+}
+
+#[derive(Deserialize, Serialize)]
 pub struct JsonCompositionGraph {
     pub version: u32,
     pub nodes: Vec<JsonNode>,
     pub exports: Vec<JsonExport>,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct JsonNode {
     pub id: u32,
     pub name: String,
@@ -55,7 +53,7 @@ pub struct JsonNode {
     pub imports: Vec<JsonInterfaceConnection>,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct JsonInterfaceConnection {
     pub interface: String,
     pub short: String,
@@ -63,7 +61,7 @@ pub struct JsonInterfaceConnection {
     pub is_host_import: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct JsonExport {
     pub interface: String,
     pub source_instance: u32,
@@ -106,7 +104,7 @@ mod tests {
     #[test]
     fn test_full_json() {
         let graph = test_graph();
-        let output = generate_json(&graph).unwrap();
+        let output = generate_json(&graph, true).unwrap();
         println!("{output}");
 
         assert!(output.contains("srv"), "should show srv");
@@ -119,7 +117,7 @@ mod tests {
     fn test_empty_graph_json() {
         let graph = CompositionGraph::new();
 
-        let full = generate_json(&graph).unwrap();
+        let full = generate_json(&graph, true).unwrap();
         println!("{full}");
         assert!(full.contains("[]"));
     }
