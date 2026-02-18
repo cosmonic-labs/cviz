@@ -1,0 +1,26 @@
+name: Publish
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    if: startsWith(github.event.pull_request.head.ref, 'release-v')
+    steps:
+      - name: cargo login
+        run: cargo login ${{ secrets.CVIZ_API_TOKEN }}
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish Update
+        run: cargo publish
