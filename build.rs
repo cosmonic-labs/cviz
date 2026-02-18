@@ -8,7 +8,9 @@ fn main() {
         .ok()
         .and_then(|o| {
             if o.status.success() {
-                String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
+                String::from_utf8(o.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
             } else {
                 None
             }
@@ -19,8 +21,8 @@ fn main() {
 
     // Extract wasmparser version from Cargo.lock
     let lock_contents = std::fs::read_to_string("Cargo.lock").unwrap_or_default();
-    let wasmparser_version = parse_wasmparser_version(&lock_contents)
-        .unwrap_or_else(|| "unknown".to_string());
+    let wasmparser_version =
+        parse_wasmparser_version(&lock_contents).unwrap_or_else(|| "unknown".to_string());
 
     println!("cargo:rustc-env=WASMPARSER_VERSION={}", wasmparser_version);
 
