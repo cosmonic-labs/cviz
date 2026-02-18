@@ -38,8 +38,8 @@ impl ComponentNode {
 pub struct InterfaceConnection {
     /// e.g., "wasi:http/handler@0.3.0-rc-2026-01-06"
     pub interface_name: String,
-    /// Which instance provides this (None if host import)
-    pub source_instance: Option<u32>,
+    /// Which instance provides this
+    pub source_instance: u32,
     /// Whether this comes from the host
     pub is_host_import: bool,
 }
@@ -48,7 +48,7 @@ impl InterfaceConnection {
     pub fn from_instance(interface_name: String, source_instance: u32) -> Self {
         Self {
             interface_name,
-            source_instance: Some(source_instance),
+            source_instance,
             is_host_import: false,
         }
     }
@@ -56,11 +56,6 @@ impl InterfaceConnection {
     /// Get a short label for the interface (just the interface name without package/version)
     pub fn short_label(&self) -> String {
         short_interface_name(&self.interface_name)
-    }
-
-    /// Check if this is the HTTP handler interface
-    pub fn is_http_handler(&self) -> bool {
-        self.interface_name.contains("wasi:http/handler")
     }
 }
 
@@ -111,58 +106,30 @@ impl CompositionGraph {
         interfaces.into_iter().collect()
     }
 
-    /// Get the HTTP handler chain in request-flow order (outermost → innermost).
-    /// The first element is the exported handler (entry point for requests),
-    /// and the last element is the innermost handler (imports from host).
-    pub fn get_handler_chain(&self) -> Vec<u32> {
-        let mut chain = Vec::new();
-
-        // Find the export point for wasi:http/handler
-        let export_instance = self
-            .component_exports
-            .iter()
-            .find(|(name, _)| name.contains("wasi:http/handler"))
-            .map(|(_, idx)| *idx);
-
-        if let Some(start) = export_instance {
-            // Walk from export through the chain following handler imports
-            let mut current = Some(start);
-            let mut visited = std::collections::HashSet::new();
-
-            while let Some(idx) = current {
-                if visited.contains(&idx) {
-                    break; // Avoid infinite loops
-                }
-                visited.insert(idx);
-                chain.push(idx);
-
-                // Find what this node imports for handler
-                current = self.nodes.get(&idx).and_then(|node| {
-                    node.imports
-                        .iter()
-                        .find(|conn| conn.is_http_handler() && !conn.is_host_import)
-                        .and_then(|conn| conn.source_instance)
-                });
+    pub fn validate(&self) -> Result<(), String> {
+        for (iface, src) in &self.component_exports {
+            if !self.nodes.contains_key(src) {
+                return Err(format!(
+                    "Export '{}' references unknown instance {}",
+                    iface, src
+                ));
             }
         }
 
-        chain
-    }
-}
-
-/// Sanitize a string for use as a Mermaid node ID
-pub fn sanitize_for_mermaid(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '_' {
-                c
-            } else {
-                '_'
+        for (id, node) in &self.nodes {
+            for conn in &node.imports {
+                let src = conn.source_instance;
+                if !self.nodes.contains_key(&src) {
+                    return Err(format!(
+                        "Instance {} imports from unknown instance {}",
+                        id, src
+                    ));
+                }
             }
-        })
-        .collect::<String>()
-        .trim_start_matches('_')
-        .to_string()
+        }
+
+        Ok(())
+    }
 }
 
 /// Extract a short interface name from a full interface path
@@ -197,12 +164,5 @@ mod tests {
         assert_eq!(short_interface_name("wasi:http/handler@0.3.0"), "handler");
         assert_eq!(short_interface_name("wasi:io/streams@0.2.0"), "streams");
         assert_eq!(short_interface_name("simple"), "simple");
-    }
-
-    #[test]
-    fn test_sanitize_for_mermaid() {
-        assert_eq!(sanitize_for_mermaid("$srv"), "srv");
-        assert_eq!(sanitize_for_mermaid("mdl-a"), "mdl_a");
-        assert_eq!(sanitize_for_mermaid("instance_0"), "instance_0");
     }
 }

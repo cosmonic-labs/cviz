@@ -1,10 +1,15 @@
+pub mod ascii;
+pub mod json;
+pub mod mermaid;
+
 /// Output format for visualization
 #[derive(Debug, Clone, Copy, Default)]
 pub enum OutputFormat {
     #[default]
     Ascii,
     Mermaid,
-    Json
+    Json,
+    JsonPretty,
 }
 
 impl std::str::FromStr for OutputFormat {
@@ -15,7 +20,8 @@ impl std::str::FromStr for OutputFormat {
             "ascii" => Ok(OutputFormat::Ascii),
             "mermaid" => Ok(OutputFormat::Mermaid),
             "json" => Ok(OutputFormat::Json),
-            _ => Err(format!("Invalid output format: {}. Valid values: ascii, mermaid, json", s)),
+            "json-pretty" => Ok(OutputFormat::JsonPretty),
+            _ => Err(format!("Invalid output format: {}. Valid values: ascii, mermaid, json, json-pretty", s)),
         }
     }
 }
@@ -29,7 +35,7 @@ pub enum Direction {
 }
 
 impl Direction {
-    pub fn to_mermaid(&self) -> &'static str {
+    pub fn to_mermaid(self) -> &'static str {
         match self {
             Direction::LeftToRight => "LR",
             Direction::TopDown => "TD",

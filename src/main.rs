@@ -1,16 +1,9 @@
-mod ascii;
-mod mermaid;
-mod model;
-mod output;
-mod parser;
-mod json;
-
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-
-use output::{DetailLevel, Direction, OutputFormat};
+use cviz::output;
+use cviz::output::{DetailLevel, Direction, OutputFormat};
 
 #[derive(Parser, Debug)]
 #[command(name = "cviz")]
@@ -58,14 +51,15 @@ fn main() -> Result<()> {
         .with_context(|| format!("Failed to read file: {}", args.file.display()))?;
 
     // Parse the component
-    let graph = parser::parse_component(&bytes)
+    let graph = cviz::parse::component::parse_component(&bytes)
         .with_context(|| format!("Failed to parse component: {}", args.file.display()))?;
 
     // Generate the diagram based on format
     let diagram = match args.format {
-        OutputFormat::Ascii => ascii::generate_ascii(&graph, args.detail),
-        OutputFormat::Mermaid => mermaid::generate_mermaid(&graph, args.detail, args.direction),
-        OutputFormat::Json => json::generate_json(&graph)?, // always generates the full graph
+        OutputFormat::Ascii => output::ascii::generate_ascii(&graph, args.detail),
+        OutputFormat::Mermaid => output::mermaid::generate_mermaid(&graph, args.detail, args.direction),
+        OutputFormat::Json => output::json::generate_json(&graph, false)?, // always generates the full graph
+        OutputFormat::JsonPretty => output::json::generate_json(&graph, true)?, // always generates the full graph
     };
 
     // Output
