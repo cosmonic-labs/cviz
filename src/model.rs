@@ -38,8 +38,8 @@ impl ComponentNode {
 pub struct InterfaceConnection {
     /// e.g., "wasi:http/handler@0.3.0-rc-2026-01-06"
     pub interface_name: String,
-    /// Which instance provides this (None if host import)
-    pub source_instance: Option<u32>,
+    /// Which instance provides this
+    pub source_instance: u32,
     /// Whether this comes from the host
     pub is_host_import: bool,
 }
@@ -48,7 +48,7 @@ impl InterfaceConnection {
     pub fn from_instance(interface_name: String, source_instance: u32) -> Self {
         Self {
             interface_name,
-            source_instance: Some(source_instance),
+            source_instance,
             is_host_import: false,
         }
     }
@@ -118,13 +118,12 @@ impl CompositionGraph {
 
         for (id, node) in &self.nodes {
             for conn in &node.imports {
-                if let Some(src) = conn.source_instance {
-                    if !self.nodes.contains_key(&src) {
-                        return Err(format!(
-                            "Instance {} imports from unknown instance {}",
-                            id, src
-                        ));
-                    }
+                let src = conn.source_instance;
+                if !self.nodes.contains_key(&src) {
+                    return Err(format!(
+                        "Instance {} imports from unknown instance {}",
+                        id, src
+                    ));
                 }
             }
         }

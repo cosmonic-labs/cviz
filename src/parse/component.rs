@@ -166,10 +166,8 @@ pub fn parse_component(bytes: &[u8]) -> Result<CompositionGraph> {
 
     for node in graph.nodes.values_mut() {
         for import in &mut node.imports {
-            if let Some(source_idx) = import.source_instance {
-                if source_idx < first_component_instance {
-                    import.is_host_import = true;
-                }
+            if import.source_instance < first_component_instance {
+                import.is_host_import = true;
             }
         }
     }
@@ -308,7 +306,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             first_handler.source_instance,
-            Some(chain[1]),
+            chain[1],
             "first node's handler source should be the last chain node"
         );
     }

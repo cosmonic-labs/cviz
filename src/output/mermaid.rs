@@ -108,17 +108,15 @@ fn generate_all_interfaces(graph: &CompositionGraph, direction: Direction) -> St
                     label,
                     sanitize_for_mermaid(&node.name)
                 ));
-            } else if let Some(source_idx) = import.source_instance {
-                if let Some(source_node) = graph.get_node(source_idx) {
-                    if source_node.component_index != SYNTHETIC_COMPONENT {
-                        let label = import.short_label();
-                        output.push_str(&format!(
-                            "    {} -->|\"{}\"| {}\n",
-                            sanitize_for_mermaid(&source_node.name),
-                            label,
-                            sanitize_for_mermaid(&node.name)
-                        ));
-                    }
+            } else if let Some(source_node) = graph.get_node(import.source_instance) {
+                if source_node.component_index != SYNTHETIC_COMPONENT {
+                    let label = import.short_label();
+                    output.push_str(&format!(
+                        "    {} -->|\"{}\"| {}\n",
+                        sanitize_for_mermaid(&source_node.name),
+                        label,
+                        sanitize_for_mermaid(&node.name)
+                    ));
                 }
             }
         }
@@ -164,8 +162,8 @@ fn generate_full(graph: &CompositionGraph, direction: Direction) -> String {
     // Show all connections with full interface names
     for node in graph.nodes.values() {
         for import in &node.imports {
-            if let Some(source_idx) = import.source_instance {
-                if let Some(source_node) = graph.get_node(source_idx) {
+            if !import.is_host_import {
+                if let Some(source_node) = graph.get_node(import.source_instance) {
                     output.push_str(&format!(
                         "    {} -->|\"{}\"| {}\n",
                         sanitize_for_mermaid(&source_node.name),
@@ -221,7 +219,7 @@ mod tests {
         let mut srv = ComponentNode::new("$srv".to_string(), 0);
         srv.add_import(InterfaceConnection {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: Some(0),
+            source_instance: 0,
             is_host_import: true,
         });
         graph.add_node(1, srv);
@@ -229,12 +227,12 @@ mod tests {
         let mut mw = ComponentNode::new("$middleware".to_string(), 1);
         mw.add_import(InterfaceConnection {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: Some(1),
+            source_instance: 1,
             is_host_import: false,
         });
         mw.add_import(InterfaceConnection {
             interface_name: "wasi:logging/log@0.1.0".to_string(),
-            source_instance: Some(0),
+            source_instance: 0,
             is_host_import: true,
         });
         graph.add_node(2, mw);

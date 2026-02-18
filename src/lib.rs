@@ -24,11 +24,12 @@ pub fn get_chain_for(graph: &CompositionGraph, interface_name: &str) -> Vec<u32>
 
     if let Some(start) = export_instance {
         // Walk from export through the chain following handler imports
-        let mut current = Some(start);
+        let mut current = Some((start, false));
+
         let mut visited = std::collections::HashSet::new();
 
-        while let Some(idx) = current {
-            if visited.contains(&idx) {
+        while let Some((idx, is_host)) = current {
+            if is_host || visited.contains(&idx) {
                 break; // Avoid infinite loops
             }
             visited.insert(idx);
@@ -39,7 +40,7 @@ pub fn get_chain_for(graph: &CompositionGraph, interface_name: &str) -> Vec<u32>
                 node.imports
                     .iter()
                     .find(|conn| is_connection_for(conn, interface_name) && !conn.is_host_import)
-                    .and_then(|conn| conn.source_instance)
+                    .map(|conn| (conn.source_instance, conn.is_host_import))
             });
         }
     }
