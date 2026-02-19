@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use anyhow::Result;
 use wirm::ir::component::refs::GetItemRef;
 use wirm::ir::component::visitor::{
@@ -18,44 +19,49 @@ pub fn parse_component(buff: &[u8]) -> Result<CompositionGraph> {
     Ok(visitor.graph)
 }
 struct Visitor {
-    first_component_instance_id: u32,
+    curr_comp_num: u32,
+    comp_id_to_num: Vec<HashMap<u32, u32>>,
     graph: CompositionGraph,
 }
 impl Visitor {
     pub fn new() -> Self {
         Self {
-            first_component_instance_id: u32::MAX,
+            curr_comp_num: 0,
+            comp_id_to_num: Vec::new(),
             graph: CompositionGraph::new(),
         }
     }
     pub fn postprocess(&mut self) {
         // Mark host imports on the connections
-        // Instances 0 to (first component instance - 1) are imports from the host
-        let first_inst_id = if self.first_component_instance_id == u32::MAX {
-            0
-        } else {
-            self.first_component_instance_id
-        };
-
+        // Imports that aren't from a node inside the component graph are actually imported from the host.
+        let all_node_inst_ids = self.graph.nodes.keys().copied().collect::<Vec<_>>();
         for node in self.graph.nodes.values_mut() {
             for import in &mut node.imports {
-                if let Some(source_idx) = import.source_instance {
-                    if source_idx < first_inst_id {
-                        import.is_host_import = true;
-                    }
+                if !all_node_inst_ids.contains(&import.source_instance) {
+                    import.is_host_import = true;
                 }
             }
         }
     }
 }
 impl ComponentVisitor for Visitor {
+    fn enter_component(&mut self, _cx: &VisitCtx, id: Option<u32>, _component: &Component) {
+        // only handle the internal components!
+        if let Some(id) = id {
+            if let Some(outer) = self.comp_id_to_num.last_mut() {
+                outer.insert(id, self.curr_comp_num);
+            }
+            self.curr_comp_num += 1;
+        }
+        self.comp_id_to_num.push(HashMap::new());
+    }
+
+    fn exit_component(&mut self, _: &VisitCtx, _: Option<u32>, _component: &Component) {
+        self.comp_id_to_num.pop();
+    }
+
     // Process component instances - ** this is where the composition wiring lives **
     fn visit_comp_instance(&mut self, cx: &VisitCtx, id: u32, instance: &ComponentInstance) {
-        // Finding the ID of the first component instance (will have the smallest id)
-        if id < self.first_component_instance_id {
-            self.first_component_instance_id = id;
-        }
-
         let name = cx
             .lookup_comp_inst_name(id)
             .map(|n| n.to_string())
@@ -65,7 +71,8 @@ impl ComponentVisitor for Visitor {
                 component_index,
                 args,
             } => {
-                let mut node = ComponentNode::new(name, *component_index);
+                let comp_num = self.comp_id_to_num.last().unwrap()[&component_index];
+                let mut node = ComponentNode::new(name, *component_index, comp_num);
 
                 // Process the "with" arguments - these are the interface connections
                 for arg in args.iter() {
@@ -145,6 +152,7 @@ fn resolve_imp_alias(cx: &VisitCtx, alias: &ComponentAlias, export_name: &str, g
 
 #[cfg(test)]
 mod tests {
+    use crate::{get_chain_for, is_connection_for};
     use super::*;
 
     /// WAT for a composed component with two middleware instances chained via wasi:http/handler.
@@ -199,9 +207,10 @@ mod tests {
         assert_eq!(real_nodes.len(), 2, "expected 2 real component nodes");
 
         // Each node should have a handler import
+        let http_interface = "wasi:http/handler";
         for node in &real_nodes {
             assert!(
-                node.imports.iter().any(|i| i.is_http_handler()),
+                node.imports.iter().any(|i| is_connection_for(i, http_interface)),
                 "node '{}' should have a handler import",
                 node.name
             );
@@ -219,7 +228,8 @@ mod tests {
         let bytes = wat::parse_str(two_middleware_chain_wat()).expect("failed to parse WAT");
         let graph = parse_component(&bytes).expect("failed to parse component");
 
-        let chain = graph.get_handler_chain();
+        let http_interface = "wasi:http/handler";
+        let chain = get_chain_for(&graph, http_interface);
         assert_eq!(chain.len(), 2, "expected 2 nodes in handler chain");
 
         // Chain is in request-flow order: outermost (export) first, innermost last
@@ -229,7 +239,7 @@ mod tests {
             first
                 .imports
                 .iter()
-                .any(|i| !i.is_host_import && i.is_http_handler()),
+                .any(|i| !i.is_host_import && is_connection_for(i, http_interface)),
             "first chain node (outermost) should import handler from another component"
         );
 
@@ -238,15 +248,15 @@ mod tests {
         assert!(
             last.imports
                 .iter()
-                .any(|i| i.is_host_import && i.is_http_handler()),
+                .any(|i| i.is_host_import && is_connection_for(i, http_interface)),
             "last chain node (innermost) should import handler from host"
         );
 
         // First node's handler source should be the last node
-        let first_handler = first.imports.iter().find(|i| i.is_http_handler()).unwrap();
+        let first_handler = first.imports.iter().find(|i| is_connection_for(i, http_interface)).unwrap();
         assert_eq!(
             first_handler.source_instance,
-            Some(chain[1]),
+            chain[1],
             "first node's handler source should be the last chain node"
         );
     }
