@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use anyhow::Result;
+use std::collections::HashMap;
 use wirm::ir::component::refs::GetItemRef;
 use wirm::ir::component::visitor::{
     traverse_component, ComponentVisitor, ItemKind, ResolvedItem, VisitCtx,
@@ -71,7 +71,7 @@ impl ComponentVisitor for Visitor {
                 component_index,
                 args,
             } => {
-                let comp_num = self.comp_id_to_num.last().unwrap()[&component_index];
+                let comp_num = self.comp_id_to_num.last().unwrap()[component_index];
                 let mut node = ComponentNode::new(name, *component_index, comp_num);
 
                 // Process the "with" arguments - these are the interface connections
@@ -127,7 +127,12 @@ impl ComponentVisitor for Visitor {
     }
 }
 
-fn resolve_inst_alias(cx: &VisitCtx, alias: &ComponentAlias, interface_name: &str, node: &mut ComponentNode) {
+fn resolve_inst_alias(
+    cx: &VisitCtx,
+    alias: &ComponentAlias,
+    interface_name: &str,
+    node: &mut ComponentNode,
+) {
     let inst_ref = alias.get_item_ref();
 
     match cx.resolve(&inst_ref.ref_) {
@@ -136,24 +141,33 @@ fn resolve_inst_alias(cx: &VisitCtx, alias: &ComponentAlias, interface_name: &st
                 InterfaceConnection::from_instance(interface_name.to_string(), inst_id);
             node.add_import(connection);
         }
-        ResolvedItem::Alias(_, nested_alias) => resolve_inst_alias(cx, nested_alias, interface_name, node),
+        ResolvedItem::Alias(_, nested_alias) => {
+            resolve_inst_alias(cx, nested_alias, interface_name, node)
+        }
         _ => {}
     }
 }
-fn resolve_imp_alias(cx: &VisitCtx, alias: &ComponentAlias, export_name: &str, graph: &mut CompositionGraph) {
+fn resolve_imp_alias(
+    cx: &VisitCtx,
+    alias: &ComponentAlias,
+    export_name: &str,
+    graph: &mut CompositionGraph,
+) {
     let inst_ref = alias.get_item_ref();
 
     match cx.resolve(&inst_ref.ref_) {
         ResolvedItem::CompInst(inst_id, _) => graph.add_export(export_name.to_string(), inst_id),
-        ResolvedItem::Alias(_, nested_alias) => resolve_imp_alias(cx, nested_alias, export_name, graph),
+        ResolvedItem::Alias(_, nested_alias) => {
+            resolve_imp_alias(cx, nested_alias, export_name, graph)
+        }
         _ => {}
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{get_chain_for, is_connection_for};
     use super::*;
+    use crate::{get_chain_for, is_connection_for};
 
     /// WAT for a composed component with two middleware instances chained via wasi:http/handler.
     ///
@@ -210,7 +224,9 @@ mod tests {
         let http_interface = "wasi:http/handler";
         for node in &real_nodes {
             assert!(
-                node.imports.iter().any(|i| is_connection_for(i, http_interface)),
+                node.imports
+                    .iter()
+                    .any(|i| is_connection_for(i, http_interface)),
                 "node '{}' should have a handler import",
                 node.name
             );
@@ -218,7 +234,10 @@ mod tests {
 
         // Should have an export for the handler
         assert!(
-            graph.component_exports.keys().any(|k| k.contains("wasi:http/handler")),
+            graph
+                .component_exports
+                .keys()
+                .any(|k| k.contains("wasi:http/handler")),
             "expected handler export"
         );
     }
@@ -253,10 +272,13 @@ mod tests {
         );
 
         // First node's handler source should be the last node
-        let first_handler = first.imports.iter().find(|i| is_connection_for(i, http_interface)).unwrap();
+        let first_handler = first
+            .imports
+            .iter()
+            .find(|i| is_connection_for(i, http_interface))
+            .unwrap();
         assert_eq!(
-            first_handler.source_instance,
-            chain[1],
+            first_handler.source_instance, chain[1],
             "first node's handler source should be the last chain node"
         );
     }
@@ -268,7 +290,9 @@ mod tests {
 
         let host_interfaces = graph.host_interfaces();
         assert!(
-            host_interfaces.iter().any(|i| i.contains("wasi:http/handler")),
+            host_interfaces
+                .iter()
+                .any(|i| i.contains("wasi:http/handler")),
             "expected host handler interface, got: {:?}",
             host_interfaces
         );
