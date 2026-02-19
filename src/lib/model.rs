@@ -10,15 +10,19 @@ pub struct ComponentNode {
     pub name: String,
     /// Which component is being instantiated
     pub component_index: u32,
+    /// Which component is being instantiated, these are numbered
+    /// from 0->N in order of the components as they show up in the binary!
+    pub component_num: u32,
     /// List of interface connections (what it receives)
     pub imports: Vec<InterfaceConnection>,
 }
 
 impl ComponentNode {
-    pub fn new(name: String, component_index: u32) -> Self {
+    pub fn new(name: String, component_index: u32, component_num: u32) -> Self {
         Self {
             name,
             component_index,
+            component_num,
             imports: Vec::new(),
         }
     }

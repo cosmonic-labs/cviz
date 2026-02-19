@@ -40,6 +40,7 @@ impl CompositionGraph {
             let mut node = ComponentNode::new(
                 format!("${}", json_node.name), // restore `$` convention
                 json_node.component_index,
+                0,
             );
 
             for conn in json_node.imports {
