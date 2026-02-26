@@ -1,20 +1,19 @@
+use crate::model::{ComponentNode, CompositionGraph, InterfaceConnection};
 use anyhow::Result;
 use std::collections::HashMap;
 use wirm::ir::component::refs::GetItemRef;
 use wirm::ir::component::visitor::{
-    traverse_component, ComponentVisitor, ItemKind, ResolvedItem, VisitCtx,
+    walk_structural, ComponentVisitor, ItemKind, ResolvedItem, VisitCtx,
 };
 use wirm::wasmparser::{ComponentAlias, ComponentExport, ComponentInstance, ComponentTypeRef};
 use wirm::Component;
-
-use crate::model::{ComponentNode, CompositionGraph, InterfaceConnection};
 
 /// Parse a WebAssembly component file and extract its composition graph
 pub fn parse_component(buff: &[u8]) -> Result<CompositionGraph> {
     let component = Component::parse(buff, false, false).expect("Unable to parse");
     let mut visitor = Visitor::new();
 
-    traverse_component(&component, &mut visitor);
+    walk_structural(&component, &mut visitor);
     visitor.postprocess();
     Ok(visitor.graph)
 }
@@ -44,19 +43,22 @@ impl Visitor {
         }
     }
 }
-impl ComponentVisitor for Visitor {
-    fn enter_component(&mut self, _cx: &VisitCtx, id: Option<u32>, _component: &Component) {
-        // only handle the internal components!
-        if let Some(id) = id {
-            if let Some(outer) = self.comp_id_to_num.last_mut() {
-                outer.insert(id, self.curr_comp_num);
-            }
-            self.curr_comp_num += 1;
+impl ComponentVisitor<'_> for Visitor {
+    fn enter_root_component(&mut self, _cx: &VisitCtx<'_>, _component: &Component<'_>) {
+        self.comp_id_to_num.push(HashMap::new());
+    }
+    fn exit_root_component(&mut self, _cx: &VisitCtx<'_>, _component: &Component<'_>) {
+        self.comp_id_to_num.pop();
+    }
+    fn enter_component(&mut self, _cx: &VisitCtx, id: u32, _component: &Component) {
+        if let Some(outer) = self.comp_id_to_num.last_mut() {
+            outer.insert(id, self.curr_comp_num);
         }
+        self.curr_comp_num += 1;
         self.comp_id_to_num.push(HashMap::new());
     }
 
-    fn exit_component(&mut self, _: &VisitCtx, _: Option<u32>, _component: &Component) {
+    fn exit_component(&mut self, _: &VisitCtx, _: u32, _component: &Component) {
         self.comp_id_to_num.pop();
     }
 
