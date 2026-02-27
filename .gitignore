@@ -1,3 +1,7 @@
 /target
-
 .idea/
+
+# Local tinkering files
+*.json
+*.wasm
+*.wat

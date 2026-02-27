@@ -222,7 +222,7 @@ mod tests {
     fn test_graph() -> CompositionGraph {
         let mut graph = CompositionGraph::new();
 
-        let mut srv = ComponentNode::new("$srv".to_string(), 0);
+        let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
         srv.add_import(InterfaceConnection {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
             source_instance: 0,
@@ -230,7 +230,7 @@ mod tests {
         });
         graph.add_node(1, srv);
 
-        let mut mw = ComponentNode::new("$middleware".to_string(), 1);
+        let mut mw = ComponentNode::new("$middleware".to_string(), 1, 1);
         mw.add_import(InterfaceConnection {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
             source_instance: 1,
