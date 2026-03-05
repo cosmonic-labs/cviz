@@ -1,9 +1,9 @@
 use crate::model::{
-    ComponentNode, CompositionGraph, FuncSignature, InstanceInterface, InterfaceConnection,
-    InterfaceType, TypeArena, TypeId, ValueType,
+    ComponentNode, CompositionGraph, ExportInfo, FuncSignature, InstanceInterface,
+    InterfaceConnection, InterfaceType, InterfaceTypeId, TypeArena, TypeId, ValueType,
 };
 use crate::output::json::{
-    FuncSignatureJson, InterfaceTypeJson, JsonCompositionGraph, ValueTypeJson,
+    FuncSignatureJson, InterfaceTypeJson, JsonCompositionGraph, JsonExport, ValueTypeJson,
 };
 use serde::de::Error;
 use std::collections::BTreeMap;
@@ -40,7 +40,7 @@ impl CompositionGraph {
     fn from_json_model(model: JsonCompositionGraph) -> Result<Self, serde_json::Error> {
         use std::collections::BTreeMap;
 
-        let mut arena = TypeArena::new();
+        let mut arena = TypeArena::default();
         let mut nodes = BTreeMap::new();
 
         for json_node in model.nodes {
@@ -79,7 +79,12 @@ impl CompositionGraph {
 
         let mut component_exports = BTreeMap::new();
         for export in model.exports {
-            component_exports.insert(export.interface, export.source_instance);
+            component_exports.insert(
+                export.interface.clone(),
+                convert_export(export, &mut arena).map_err(|e| {
+                    serde_json::Error::custom(format!("Failed to parse export for: {e}"))
+                })?,
+            );
         }
 
         Ok(CompositionGraph {
@@ -88,6 +93,23 @@ impl CompositionGraph {
             arena,
         })
     }
+}
+
+fn convert_export(json: JsonExport, arena: &mut TypeArena) -> Result<ExportInfo, String> {
+    let (ty, fingerprint) = intern_interface_type(json.interface_type.unwrap(), arena)?;
+    Ok(ExportInfo {
+        source_instance: json.source_instance,
+        fingerprint,
+        ty,
+    })
+}
+
+fn intern_interface_type(
+    json: InterfaceTypeJson,
+    arena: &mut TypeArena,
+) -> Result<(InterfaceTypeId, String), String> {
+    let ity = convert_interface_type(json, arena)?;
+    Ok((arena.intern_interface(&ity), ity.fingerprint(arena)))
 }
 
 fn convert_interface_type(
@@ -157,13 +179,13 @@ fn intern_value_type(json: ValueTypeJson, arena: &mut TypeArena) -> Result<TypeI
             ValueType::Record(fields)
         }
 
-        // etc
         // convert everything recursively
         ValueTypeJson::Resource => ValueType::Resource,
         ValueTypeJson::AsyncHandle => ValueType::AsyncHandle,
 
+        // TODO: FINISH THIS!
         _ => todo!(),
     };
 
-    Ok(arena.intern(ty))
+    Ok(arena.intern_ty(ty))
 }

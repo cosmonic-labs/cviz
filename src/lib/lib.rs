@@ -1,4 +1,4 @@
-use crate::model::{CompositionGraph, InterfaceConnection};
+use crate::model::{CompositionGraph, ExportInfo, InterfaceConnection};
 
 pub mod model;
 pub mod output;
@@ -20,7 +20,15 @@ pub fn get_chain_for(graph: &CompositionGraph, interface_name: &str) -> Vec<u32>
         .component_exports
         .iter()
         .find(|(name, _)| name.contains(interface_name))
-        .map(|(_, idx)| *idx);
+        .map(
+            |(
+                _,
+                ExportInfo {
+                    source_instance: idx,
+                    ..
+                },
+            )| *idx,
+        );
 
     if let Some(start) = export_instance {
         // Walk from export through the chain following handler imports

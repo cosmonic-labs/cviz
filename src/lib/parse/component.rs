@@ -150,7 +150,7 @@ impl ComponentVisitor<'_> for Visitor {
         // Only track instance exports
         match item {
             ResolvedItem::CompInst(inst_id, _) => {
-                self.graph.add_export(export_name, inst_id);
+                self.graph.add_export(export_name, inst_id, todo!());
             }
             ResolvedItem::Alias(_, alias) => {
                 resolve_imp_alias(cx, alias, &export_name, &mut self.graph);
@@ -244,7 +244,7 @@ fn convert_func_type(
 }
 fn convert_val_type(ty: &ComponentValType, graph: &mut CompositionGraph, cx: &VisitCtx) -> TypeId {
     let vt = convert_val_type_inner(ty, graph, cx);
-    graph.arena.intern(vt)
+    graph.arena.intern_ty(vt)
 }
 
 fn convert_val_type_inner(
@@ -418,7 +418,9 @@ fn resolve_imp_alias(
     let inst_ref = alias.get_item_ref();
 
     match cx.resolve(&inst_ref.ref_) {
-        ResolvedItem::CompInst(inst_id, _) => graph.add_export(export_name.to_string(), inst_id),
+        ResolvedItem::CompInst(inst_id, _) => {
+            graph.add_export(export_name.to_string(), inst_id, todo!())
+        }
         ResolvedItem::Alias(_, nested_alias) => {
             resolve_imp_alias(cx, nested_alias, export_name, graph)
         }

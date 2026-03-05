@@ -26,9 +26,14 @@ fn generate_json_model(graph: &CompositionGraph) -> JsonCompositionGraph {
     let exports = graph
         .component_exports
         .iter()
-        .map(|(iface, src)| JsonExport {
+        .map(|(iface, info)| JsonExport {
             interface: iface.clone(),
-            source_instance: *src,
+            source_instance: info.source_instance,
+            fingerprint: Some(info.fingerprint.clone()),
+            interface_type: Some(InterfaceTypeJson::from_ir(
+                graph.arena.lookup_interface(info.ty),
+                arena,
+            )),
         })
         .collect();
 
@@ -207,7 +212,7 @@ pub enum ValueTypeJson {
 }
 
 pub fn typeid_to_json(id: TypeId, arena: &TypeArena) -> ValueTypeJson {
-    match &arena.get(id) {
+    match &arena.lookup_ty(id) {
         ValueType::Bool => ValueTypeJson::Bool,
         ValueType::S8 => ValueTypeJson::S8,
         ValueType::U8 => ValueTypeJson::U8,
@@ -301,6 +306,10 @@ impl Serialize for ValueTypeJson {
 pub struct JsonExport {
     pub interface: String,
     pub source_instance: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interface_type: Option<InterfaceTypeJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 #[cfg(test)]
@@ -339,7 +348,7 @@ mod tests {
         });
         graph.add_node(2, mw);
 
-        graph.add_export("wasi:http/handler@0.3.0".to_string(), 2);
+        graph.add_export("wasi:http/handler@0.3.0".to_string(), 2, todo!());
         graph
     }
 

@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct TypeId(u32);
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct InterfaceTypeId(u32);
 
 /// Sentinel value for synthetic component instances (e.g., export wrappers)
 pub const SYNTHETIC_COMPONENT: u32 = u32::MAX;
@@ -117,6 +119,7 @@ pub struct InterfaceConnection {
     ///
     /// Some connections may omit this if type information was not available
     /// during graph construction.
+    // TODO: Can i make this non-optional?
     pub interface_type: Option<InterfaceType>,
 
     /// Deterministic fingerprint of the interface type.
@@ -124,6 +127,7 @@ pub struct InterfaceConnection {
     /// Fingerprints are typically computed from a canonical representation
     /// of the interface signature and can be used to quickly determine
     /// whether two interfaces are structurally identical.
+    // TODO: Can i make this non-optional?
     pub fingerprint: Option<String>,
 }
 
@@ -198,6 +202,10 @@ pub enum InterfaceType {
     Func(FuncSignature),
 }
 impl InterfaceType {
+    pub fn intern(&self, arena: &mut TypeArena) -> InterfaceTypeId {
+        arena.intern_interface(self)
+    }
+
     pub fn fingerprint(&self, arena: &TypeArena) -> String {
         let s = canonical_interface(self, arena);
         let hash = Sha256::digest(s.as_bytes());
@@ -350,7 +358,7 @@ pub struct CompositionGraph {
     /// providing that interface.
     ///
     /// This effectively defines the public surface of the composed component.
-    pub component_exports: BTreeMap<String, u32>,
+    pub component_exports: BTreeMap<String, ExportInfo>,
 
     /// Global arena containing all unique value types referenced in the graph.
     ///
@@ -384,9 +392,23 @@ impl CompositionGraph {
         self.nodes.get(&instance_index)
     }
 
-    pub fn add_export(&mut self, interface_name: String, source_instance: u32) {
-        self.component_exports
-            .insert(interface_name, source_instance);
+    pub fn add_export(
+        &mut self,
+        interface_name: String,
+        source_instance: u32,
+        interface_type: InterfaceType,
+    ) {
+        let ty = interface_type.intern(&mut self.arena);
+        let fingerprint = interface_type.fingerprint(&self.arena);
+
+        self.component_exports.insert(
+            interface_name,
+            ExportInfo {
+                source_instance,
+                ty,
+                fingerprint,
+            },
+        );
     }
 
     /// Get all real (non-synthetic) component nodes
@@ -411,7 +433,14 @@ impl CompositionGraph {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        for (iface, src) in &self.component_exports {
+        for (
+            iface,
+            ExportInfo {
+                source_instance: src,
+                ..
+            },
+        ) in &self.component_exports
+        {
             if !self.nodes.contains_key(src) {
                 return Err(format!(
                     "Export '{}' references unknown instance {}",
@@ -436,23 +465,28 @@ impl CompositionGraph {
     }
 }
 
+pub struct ExportInfo {
+    /// Index of the instance providing this export
+    pub source_instance: u32,
+    /// Fingerprint of the exported interface type
+    pub fingerprint: String,
+    /// Reference to the type in the global arena
+    pub ty: InterfaceTypeId,
+}
+
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 pub struct TypeArena {
     types: Vec<ValueType>,
     intern: HashMap<ValueType, TypeId>,
+
+    interfaces: Vec<InterfaceType>,
+    interface_intern: HashMap<String, InterfaceTypeId>,
 }
 
 impl TypeArena {
-    pub fn new() -> Self {
-        Self {
-            types: Vec::new(),
-            intern: HashMap::new(),
-        }
-    }
-
-    pub fn intern(&mut self, ty: ValueType) -> TypeId {
+    pub fn intern_ty(&mut self, ty: ValueType) -> TypeId {
         if let Some(id) = self.intern.get(&ty) {
             return *id;
         }
@@ -464,13 +498,33 @@ impl TypeArena {
         id
     }
 
-    pub fn get(&self, id: TypeId) -> &ValueType {
+    pub fn lookup_ty(&self, id: TypeId) -> &ValueType {
         &self.types[id.0 as usize]
+    }
+
+    pub fn intern_interface(&mut self, interface: &InterfaceType) -> InterfaceTypeId {
+        // Serialize the interface to a canonical string
+        // Check if it was already interned
+        let canonical_str = canonical_interface(interface, self);
+
+        // For simplicity, hash the string as a key
+        if let Some(id) = self.interface_intern.get(&canonical_str) {
+            return *id;
+        }
+
+        let id = InterfaceTypeId(self.interfaces.len() as u32);
+        self.interfaces.push(interface.clone());
+        self.interface_intern.insert(canonical_str, id);
+
+        id
+    }
+    pub fn lookup_interface(&self, id: InterfaceTypeId) -> &InterfaceType {
+        &self.interfaces[id.0 as usize]
     }
 }
 impl TypeArena {
     pub fn canonical(&self, id: TypeId) -> String {
-        match self.get(id) {
+        match self.lookup_ty(id) {
             ValueType::Map(k, v) => format!("map<{},{}>", self.canonical(*k), self.canonical(*v)),
 
             ValueType::FixedSizeList(t, n) => format!("array{}<{}>", n, self.canonical(*t)),
@@ -562,7 +616,7 @@ mod tests {
             "wasi:http/handler@0.3.0-rc-2026-01-06".to_string(),
             0,
             None,
-            &TypeArena::new(),
+            &TypeArena::default(),
         );
         assert_eq!(conn.short_label(), "handler");
 
@@ -570,7 +624,7 @@ mod tests {
             "wasi:io/streams@0.2.0".to_string(),
             1,
             None,
-            &TypeArena::new(),
+            &TypeArena::default(),
         );
         assert_eq!(conn2.short_label(), "streams");
     }

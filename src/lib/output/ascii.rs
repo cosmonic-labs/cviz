@@ -1,5 +1,5 @@
 use crate::get_chain_for;
-use crate::model::{short_interface_name, CompositionGraph, SYNTHETIC_COMPONENT};
+use crate::model::{short_interface_name, CompositionGraph, ExportInfo, SYNTHETIC_COMPONENT};
 use crate::output::DetailLevel;
 
 /// Generate an ASCII diagram from the composition graph
@@ -107,7 +107,15 @@ fn generate_all_interfaces_ascii(graph: &CompositionGraph) -> String {
     }
 
     // Exports
-    for (export_name, source_idx) in &graph.component_exports {
+    for (
+        export_name,
+        ExportInfo {
+            source_instance: source_idx,
+            // TODO: Use the type information to flesh out the visualization more!
+            ..
+        },
+    ) in &graph.component_exports
+    {
         if let Some(node) = graph.get_node(*source_idx) {
             if node.component_index != SYNTHETIC_COMPONENT {
                 let label = short_interface_name(export_name);
@@ -171,7 +179,15 @@ fn generate_full_ascii(graph: &CompositionGraph) -> String {
     }
 
     // All exports with full names
-    for (export_name, source_idx) in &graph.component_exports {
+    for (
+        export_name,
+        ExportInfo {
+            source_instance: source_idx,
+            // TODO: Use the type information to flesh out the visualization more!
+            ..
+        },
+    ) in &graph.component_exports
+    {
         if let Some(node) = graph.get_node(*source_idx) {
             connection_lines.push(format!(
                 "  [{}] ──> (Export: {})",
@@ -274,7 +290,7 @@ mod tests {
         });
         graph.add_node(2, mw);
 
-        graph.add_export("wasi:http/handler@0.3.0".to_string(), 2);
+        graph.add_export("wasi:http/handler@0.3.0".to_string(), 2, todo!());
         graph
     }
 
