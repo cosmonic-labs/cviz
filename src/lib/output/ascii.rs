@@ -252,6 +252,8 @@ mod tests {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
             source_instance: 0,
             is_host_import: true,
+            interface_type: None,
+            fingerprint: None
         });
         graph.add_node(1, srv);
 
@@ -260,11 +262,15 @@ mod tests {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
             source_instance: 1,
             is_host_import: false,
+            interface_type: None,
+            fingerprint: None
         });
         mw.add_import(InterfaceConnection {
             interface_name: "wasi:logging/log@0.1.0".to_string(),
             source_instance: 0,
             is_host_import: true,
+            interface_type: None,
+            fingerprint: None
         });
         graph.add_node(2, mw);
 

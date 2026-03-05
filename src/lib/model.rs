@@ -1,4 +1,8 @@
 use std::collections::BTreeMap;
+use sha2::{Digest, Sha256};
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct TypeId(u32);
 
 /// Sentinel value for synthetic component instances (e.g., export wrappers)
 pub const SYNTHETIC_COMPONENT: u32 = u32::MAX;
@@ -46,14 +50,27 @@ pub struct InterfaceConnection {
     pub source_instance: u32,
     /// Whether this comes from the host
     pub is_host_import: bool,
+
+    pub interface_type: Option<InterfaceType>,
+    pub fingerprint: Option<String>,
 }
 
 impl InterfaceConnection {
-    pub fn from_instance(interface_name: String, source_instance: u32) -> Self {
+    pub fn from_instance(
+        interface_name: String,
+        source_instance: u32,
+        interface_type: Option<InterfaceType>,
+    ) -> Self {
+        let fingerprint = interface_type
+            .as_ref()
+            .map(|t| t.fingerprint());
+
         Self {
             interface_name,
             source_instance,
             is_host_import: false,
+            interface_type,
+            fingerprint,
         }
     }
 
@@ -61,6 +78,185 @@ impl InterfaceConnection {
     pub fn short_label(&self) -> String {
         short_interface_name(&self.interface_name)
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum InterfaceType {
+    Instance(InstanceInterface),
+    Func(FuncSignature),
+}
+impl InterfaceType {
+    pub fn fingerprint(&self) -> String {
+        let s = canonical_interface(self);
+        let hash = Sha256::digest(s.as_bytes());
+        hex::encode(hash)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InstanceInterface {
+    pub functions: BTreeMap<String, FuncSignature>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FuncSignature {
+    pub params: Vec<ValueType>,
+    pub results: Vec<ValueType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ValueType {
+    Bool,
+    S8,
+    U8,
+    S16,
+    U16,
+    S32,
+    U32,
+    S64,
+    U64,
+    F32,
+    F64,
+    Char,
+    String,
+    ErrorContext,
+
+    Resource,
+    AsyncHandle,
+
+    List(Box<ValueType>),
+    FixedSizeList(Box<ValueType>, u32),
+    Tuple(Vec<ValueType>),
+    Record(Vec<(String, ValueType)>),
+    Variant(Vec<(String, Option<ValueType>)>),
+    Enum(Vec<String>),
+    Option(Box<ValueType>),
+    Result {
+        ok: Option<Box<ValueType>>,
+        err: Option<Box<ValueType>>,
+    },
+    Flags(Vec<String>),
+    Map(Box<ValueType>, Box<ValueType>),
+}
+impl ValueType {
+    pub fn canonical(&self) -> String {
+        match self {
+            ValueType::Map(k, v) =>
+                format!("map<{},{}>", k.canonical(), v.canonical()),
+
+            ValueType::FixedSizeList(t, n) =>
+                format!("array{}<{}>", n, t.canonical()),
+
+            ValueType::List(t) =>
+                format!("list<{}>", t.canonical()),
+
+            ValueType::Option(t) =>
+                format!("option<{}>", t.canonical()),
+
+            ValueType::Tuple(ts) =>
+                format!("tuple({})",
+                        ts.iter()
+                            .map(|t| t.canonical())
+                            .collect::<Vec<_>>()
+                            .join(",")),
+
+            ValueType::Record(fields) =>
+                format!("record{{{}}}",
+                        fields.iter()
+                            .map(|(n,t)| format!("{}:{}", n, t.canonical()))
+                            .collect::<Vec<_>>()
+                            .join(",")),
+
+            ValueType::Variant(cases) =>
+                format!("variant{{{}}}",
+                        cases.iter()
+                            .map(|(n,t)| match t {
+                                Some(t) => format!("{}:{}", n, t.canonical()),
+                                None => n.clone(),
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",")),
+
+            ValueType::Enum(names) =>
+                format!("enum{{{}}}", names.join(",")),
+
+            ValueType::Flags(names) =>
+                format!("flags{{{}}}", names.join(",")),
+
+            ValueType::Result { ok, err } =>
+                format!(
+                    "result<{},{}>",
+                    ok.as_ref().map(|t| t.canonical()).unwrap_or("_".into()),
+                    err.as_ref().map(|t| t.canonical()).unwrap_or("_".into())
+                ),
+
+            // resource handles
+            ValueType::Resource => "resource".into(),
+            ValueType::AsyncHandle => "async_handle".into(),
+
+            // primitives
+            ValueType::Bool => "bool".into(),
+            ValueType::S8 => "s8".into(),
+            ValueType::U8 => "u8".into(),
+            ValueType::S16 => "s16".into(),
+            ValueType::U16 => "u16".into(),
+            ValueType::S32 => "s32".into(),
+            ValueType::U32 => "u32".into(),
+            ValueType::S64 => "s64".into(),
+            ValueType::U64 => "u64".into(),
+            ValueType::F32 => "f32".into(),
+            ValueType::F64 => "f64".into(),
+            ValueType::Char => "char".into(),
+            ValueType::String => "string".into(),
+            ValueType::ErrorContext => "error-context".into(),
+        }
+    }
+}
+
+fn canonical_interface(iface: &InterfaceType) -> String {
+    match iface {
+        InterfaceType::Func(f) => canonical_func(f),
+
+        InterfaceType::Instance(inst) => {
+            let mut funcs: Vec<_> = inst.functions.iter().collect();
+            funcs.sort_by(|a, b| a.0.cmp(b.0));
+
+            let mut out = String::from("instance{");
+
+            for (name, func) in funcs {
+                out.push_str(name);
+                out.push(':');
+                out.push_str(&canonical_func(func));
+                out.push(';');
+            }
+
+            out.push('}');
+            out
+        }
+    }
+}
+
+fn canonical_func(f: &FuncSignature) -> String {
+    let mut out = String::from("func(");
+
+    for (i, p) in f.params.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&p.canonical());
+    }
+
+    out.push_str(")->(");
+
+    for (i, r) in f.results.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&r.canonical());
+    }
+
+    out.push(')');
+    out
 }
 
 /// The complete parsed composition structure
@@ -159,10 +355,11 @@ mod tests {
         let conn = InterfaceConnection::from_instance(
             "wasi:http/handler@0.3.0-rc-2026-01-06".to_string(),
             0,
+            None
         );
         assert_eq!(conn.short_label(), "handler");
 
-        let conn2 = InterfaceConnection::from_instance("wasi:io/streams@0.2.0".to_string(), 1);
+        let conn2 = InterfaceConnection::from_instance("wasi:io/streams@0.2.0".to_string(), 1, None);
         assert_eq!(conn2.short_label(), "streams");
     }
 

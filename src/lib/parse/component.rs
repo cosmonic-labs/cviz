@@ -1,11 +1,11 @@
-use crate::model::{ComponentNode, CompositionGraph, InterfaceConnection};
+use crate::model::{ComponentNode, CompositionGraph, FuncSignature, InstanceInterface, InterfaceConnection, InterfaceType, ValueType};
 use anyhow::Result;
-use std::collections::HashMap;
-use wirm::ir::component::refs::GetItemRef;
+use std::collections::{BTreeMap, HashMap};
+use wirm::ir::component::refs::{GetCompRefs, GetItemRef, GetTypeRefs};
 use wirm::ir::component::visitor::{
     walk_structural, ComponentVisitor, ItemKind, ResolvedItem, VisitCtx,
 };
-use wirm::wasmparser::{ComponentAlias, ComponentExport, ComponentInstance, ComponentTypeRef};
+use wirm::wasmparser::{ComponentAlias, ComponentDefinedType, ComponentExport, ComponentInstance, ComponentType, ComponentTypeRef, ComponentValType, InstanceTypeDeclaration, PrimitiveValType};
 use wirm::Component;
 
 /// Parse a WebAssembly component file and extract its composition graph
@@ -73,12 +73,19 @@ impl ComponentVisitor<'_> for Visitor {
                 component_index,
                 args,
             } => {
+                let instantiated_comp = if let ResolvedItem::Component(_, comp) = cx.resolve(&instance.get_comp_refs().first().unwrap().ref_) {
+                    Some(comp)
+                } else {
+                    None
+                };
+
                 let comp_num = self.comp_id_to_num.last().unwrap()[component_index];
                 let mut node = ComponentNode::new(name, *component_index, comp_num);
 
                 // Process the "with" arguments - these are the interface connections
                 for arg in args.iter() {
                     let interface_name = arg.name.to_string();
+                    let interface_type = pull_type_info(&interface_name, &instantiated_comp, cx);
 
                     // The arg.index is the instance providing this interface
                     // It might be an alias, so resolve it to the actual source instance
@@ -86,18 +93,18 @@ impl ComponentVisitor<'_> for Visitor {
                     match item {
                         ResolvedItem::CompInst(inst_id, _) => {
                             let connection =
-                                InterfaceConnection::from_instance(interface_name, inst_id);
+                                InterfaceConnection::from_instance(interface_name, inst_id, interface_type);
                             node.add_import(connection);
                         }
                         ResolvedItem::Import(id, imp) => {
                             if let ComponentTypeRef::Instance(_) = imp.ty {
                                 let connection =
-                                    InterfaceConnection::from_instance(interface_name, id);
+                                    InterfaceConnection::from_instance(interface_name, id, interface_type);
                                 node.add_import(connection);
                             }
                         }
                         ResolvedItem::Alias(_, alias) => {
-                            resolve_inst_alias(cx, alias, &interface_name, &mut node);
+                            resolve_inst_alias(cx, alias, &interface_name, interface_type, &mut node);
                         }
                         _ => {}
                     }
@@ -129,10 +136,267 @@ impl ComponentVisitor<'_> for Visitor {
     }
 }
 
+fn pull_type_info(interface_name: &str, instantiated_comp: &Option<&Component>, cx: &VisitCtx) -> Option<InterfaceType> {
+
+    let comp = (*instantiated_comp)?;
+
+    for imp in &comp.imports {
+        if imp.name.0 == interface_name {
+            let refs = imp.get_type_refs();
+            let type_ref = refs.first()?;
+
+            if let ResolvedItem::CompType(_, ty) =
+                cx.resolve(&type_ref.ref_)
+            {
+                return convert_component_type(ty, cx);
+            }
+        }
+    }
+
+    None
+}
+fn convert_component_type(
+    ty: &ComponentType,
+    cx: &VisitCtx,
+) -> Option<InterfaceType> {
+
+    match ty {
+        ComponentType::Instance(decls) => {
+            Some(InterfaceType::Instance(
+                convert_instance_type(decls, cx)
+            ))
+        }
+
+        ComponentType::Func(_) => {
+            Some(InterfaceType::Func(
+                convert_func_type(ty, cx).unwrap()
+            ))
+        }
+
+        _ => None,
+    }
+}
+fn convert_instance_type(
+    decls: &[InstanceTypeDeclaration],
+    cx: &VisitCtx,
+) -> InstanceInterface {
+    let mut functions = BTreeMap::new();
+
+    for decl in decls {
+        if let InstanceTypeDeclaration::Export { name, .. } = decl {
+            if let Some(type_ref) = decl.get_type_refs().first() {
+                if let ResolvedItem::CompType(_, ty) = cx.resolve(&type_ref.ref_) {
+                    if let Some(sig) = convert_func_type(ty, cx) {
+                        functions.insert(
+                            name.0.to_string(),
+                            sig
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    InstanceInterface { functions }
+}
+fn convert_func_type(
+    ty: &ComponentType,
+    cx: &VisitCtx,
+) -> Option<FuncSignature> {
+    if let ComponentType::Func(func_ty) = ty {
+        let params = func_ty
+            .params
+            .iter()
+            .map(|(_, t)| convert_val_type(t, cx))
+            .collect();
+
+        let results = func_ty
+            .result
+            .map(|t| convert_val_type(&t, cx))
+            .into_iter().collect();
+
+        Some(FuncSignature { params, results })
+    } else {
+        None
+    }
+}
+fn convert_val_type(
+    ty: &ComponentValType,
+    cx: &VisitCtx,
+) -> ValueType {
+
+    match ty {
+        ComponentValType::Primitive(prim) => convert_prim_type_to_val(prim),
+
+        ComponentValType::Type(_) => {
+            if let Some(type_ref) = ty.get_type_refs().first() {
+                if let ResolvedItem::CompType(_, comp_ty) =
+                    cx.resolve(&type_ref.ref_)
+                {
+                    return convert_component_type_to_val(comp_ty, cx);
+                }
+            }
+
+            panic!("unresolved ComponentValType::Type")
+        }
+    }
+}
+fn convert_prim_type_to_val(
+    ty: &PrimitiveValType
+) -> ValueType {
+    match ty {
+        PrimitiveValType::Bool => ValueType::Bool,
+        PrimitiveValType::S8 => ValueType::S8,
+        PrimitiveValType::U8 => ValueType::U8,
+        PrimitiveValType::S16 => ValueType::S16,
+        PrimitiveValType::U16 => ValueType::U16,
+        PrimitiveValType::S32 => ValueType::S32,
+        PrimitiveValType::U32 => ValueType::U32,
+        PrimitiveValType::S64 => ValueType::S64,
+        PrimitiveValType::U64 => ValueType::U64,
+        PrimitiveValType::F32 => ValueType::F32,
+        PrimitiveValType::F64 => ValueType::F64,
+        PrimitiveValType::Char => ValueType::Char,
+        PrimitiveValType::String => ValueType::String,
+        PrimitiveValType::ErrorContext => ValueType::ErrorContext,
+    }
+}
+fn convert_component_type_to_val(
+    ty: &ComponentType,
+    cx: &VisitCtx,
+) -> ValueType {
+
+    match ty {
+
+        ComponentType::Defined(def) => {
+            convert_defined_type(def, cx)
+        }
+
+        ComponentType::Resource { .. } => {
+            ValueType::Resource
+        }
+
+        // These shouldn't normally appear in a value position
+        ComponentType::Func(_) |
+        ComponentType::Component(_) |
+        ComponentType::Instance(_) => {
+            panic!("unexpected component type in value position: {:?}", ty)
+        }
+    }
+}
+fn convert_defined_type(
+    ty: &ComponentDefinedType,
+    cx: &VisitCtx,
+) -> ValueType {
+
+    match ty {
+
+        ComponentDefinedType::Record(fields) => {
+            ValueType::Record(
+                fields.iter()
+                    .map(|(name, ty)| {
+                        (
+                            name.to_string(),
+                            convert_val_type(ty, cx),
+                        )
+                    })
+                    .collect()
+            )
+        }
+
+        ComponentDefinedType::Variant(cases) => {
+            ValueType::Variant(
+                cases.iter()
+                    .map(|c| {
+                        (
+                            c.name.to_string(),
+                            c.ty.as_ref()
+                                .map(|t| convert_val_type(t, cx)),
+                        )
+                    })
+                    .collect()
+            )
+        }
+
+        ComponentDefinedType::List(ty) => {
+            ValueType::List(Box::new(
+                convert_val_type(ty, cx)
+            ))
+        }
+
+        ComponentDefinedType::Tuple(types) => {
+            ValueType::Tuple(
+                types.iter()
+                    .map(|t| convert_val_type(t, cx))
+                    .collect()
+            )
+        }
+
+        ComponentDefinedType::Option(ty) => {
+            ValueType::Variant(vec![
+                ("none".into(), None),
+                ("some".into(), Some(convert_val_type(ty, cx))),
+            ])
+        }
+
+        ComponentDefinedType::Result { ok, err } => {
+            ValueType::Variant(vec![
+                ("ok".into(), ok.as_ref().map(|t| convert_val_type(t, cx))),
+                ("err".into(), err.as_ref().map(|t| convert_val_type(t, cx))),
+            ])
+        }
+
+        ComponentDefinedType::Flags(flags) => {
+            ValueType::Flags(
+                flags.iter()
+                    .map(|name| name.to_string())
+                    .collect()
+            )
+        }
+
+        ComponentDefinedType::Enum(cases) => {
+            ValueType::Enum(
+                cases.iter()
+                    .map(|name| name.to_string())
+                    .collect()
+            )
+        }
+
+        ComponentDefinedType::Own(_) |
+        ComponentDefinedType::Borrow(_) => {
+            ValueType::Resource
+        }
+
+        ComponentDefinedType::Future(_) |
+        ComponentDefinedType::Stream(_) => {
+            // These appear in async APIs but aren't common yet
+            ValueType::AsyncHandle
+        }
+
+        ComponentDefinedType::Primitive(prim) => convert_prim_type_to_val(prim,),
+
+        ComponentDefinedType::Map(key, value) => {
+            ValueType::Map(
+                Box::new(convert_val_type(key, cx)),
+                Box::new(convert_val_type(value, cx)),
+            )
+        }
+
+        ComponentDefinedType::FixedSizeList(elem, size) => {
+            ValueType::FixedSizeList(
+                Box::new(convert_val_type(elem, cx)),
+                *size,
+            )
+        }
+    }
+}
+
+
 fn resolve_inst_alias(
     cx: &VisitCtx,
     alias: &ComponentAlias,
     interface_name: &str,
+    interface_type: Option<InterfaceType>,
     node: &mut ComponentNode,
 ) {
     let inst_ref = alias.get_item_ref();
@@ -140,11 +404,11 @@ fn resolve_inst_alias(
     match cx.resolve(&inst_ref.ref_) {
         ResolvedItem::CompInst(inst_id, _) => {
             let connection =
-                InterfaceConnection::from_instance(interface_name.to_string(), inst_id);
+                InterfaceConnection::from_instance(interface_name.to_string(), inst_id, interface_type);
             node.add_import(connection);
         }
         ResolvedItem::Alias(_, nested_alias) => {
-            resolve_inst_alias(cx, nested_alias, interface_name, node)
+            resolve_inst_alias(cx, nested_alias, interface_name, interface_type, node)
         }
         _ => {}
     }

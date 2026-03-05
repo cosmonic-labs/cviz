@@ -1,34 +1,70 @@
-use crate::model::CompositionGraph;
+use crate::model::{CompositionGraph, FuncSignature, InstanceInterface, InterfaceConnection, InterfaceType, ValueType};
 use serde::{Deserialize, Serialize};
 
 /// Generate JSON from the composition graph
-pub fn generate_json(graph: &CompositionGraph, pretty: bool) -> Result<String, serde_json::Error> {
-    let model = generate_json_model(graph);
-    if pretty {
-        serde_json::to_string_pretty(&model)
-    } else {
-        serde_json::to_string(&model)
-    }
-}
+// pub fn generate_json(graph: &CompositionGraph, pretty: bool) -> Result<String, serde_json::Error> {
+//     let model = generate_json_model(graph);
+//     if pretty {
+//         serde_json::to_string_pretty(&model)
+//     } else {
+//         serde_json::to_string(&model)
+//     }
+// }
+//
+// fn generate_json_model(graph: &CompositionGraph) -> JsonCompositionGraph {
+//     let nodes = graph
+//         .nodes
+//         .iter()
+//         .map(|(id, node)| JsonNode {
+//             id: *id,
+//             name: node.display_label().to_string(),
+//             component_index: node.component_index,
+//             component_num: node.component_num,
+//             imports: node
+//                 .imports
+//                 .iter()
+//                 .map(|conn| JsonInterfaceConnection {
+//                     interface: conn.interface_name.clone(),
+//                     short: conn.short_label(),
+//                     source_instance: conn.source_instance,
+//                     is_host_import: conn.is_host_import,
+//                     interface_type: conn.interface_type.as_ref().map(|t| t.into()),
+//                     fingerprint: conn.fingerprint.clone(),
+//                 })
+//                 .collect(),
+//         })
+//         .collect();
+//
+//     let exports = graph
+//         .component_exports
+//         .iter()
+//         .map(|(iface, src)| JsonExport {
+//             interface: iface.clone(),
+//             source_instance: *src,
+//         })
+//         .collect();
+//
+//     JsonCompositionGraph {
+//         version: 1,
+//         nodes,
+//         exports,
+//     }
+// }
 
+/// Generate a flattened JSON model from the composition graph
 fn generate_json_model(graph: &CompositionGraph) -> JsonCompositionGraph {
     let nodes = graph
         .nodes
         .iter()
-        .map(|(id, node)| JsonNode {
-            id: *id,
+        .map(|(&id, node)| JsonNode {
+            id,
             name: node.display_label().to_string(),
             component_index: node.component_index,
             component_num: node.component_num,
             imports: node
                 .imports
                 .iter()
-                .map(|conn| JsonInterfaceConnection {
-                    interface: conn.interface_name.clone(),
-                    short: conn.short_label(),
-                    source_instance: conn.source_instance,
-                    is_host_import: conn.is_host_import,
-                })
+                .map(JsonInterfaceConnection::from) // use your From impl
                 .collect(),
         })
         .collect();
@@ -49,6 +85,20 @@ fn generate_json_model(graph: &CompositionGraph) -> JsonCompositionGraph {
     }
 }
 
+/// Serialize a CompositionGraph to JSON (string) safely
+pub fn generate_json(graph: &CompositionGraph, pretty: bool) -> Result<String, serde_json::Error> {
+    // Convert IR -> flattened JSON-friendly model
+    let model = generate_json_model(graph);
+
+    // Serialize the flattened model
+    if pretty {
+        serde_json::to_string_pretty(&model)
+    } else {
+        serde_json::to_string(&model)
+    }
+}
+
+
 #[derive(Deserialize, Serialize)]
 pub struct JsonCompositionGraph {
     pub version: u32,
@@ -67,11 +117,301 @@ pub struct JsonNode {
 
 #[derive(Deserialize, Serialize)]
 pub struct JsonInterfaceConnection {
+    /// Full interface name (e.g., "wasi:http/handler@0.3.0-rc-2026-01-06")
     pub interface: String,
+
+    /// Short interface name (human-readable)
     pub short: String,
+
+    /// Which instance provides this interface
     pub source_instance: u32,
+
+    /// True if this is a host-provided import
     pub is_host_import: bool,
+
+    /// Optional structured type of the interface
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interface_type: Option<InterfaceTypeJson>,
+
+    /// Optional fingerprint (deterministic hash of the interface)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
+impl From<&InterfaceConnection> for JsonInterfaceConnection {
+    fn from(ic: &InterfaceConnection) -> Self {
+        JsonInterfaceConnection {
+            interface: ic.interface_name.clone(),
+            short: ic.short_label(),
+            source_instance: ic.source_instance,
+            is_host_import: ic.is_host_import,
+            interface_type: ic.interface_type.as_ref().map(|t| t.into()),
+            fingerprint: ic.fingerprint.clone(),
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InterfaceTypeJson {
+    /// Function signature
+    Func {
+        params: Vec<ValueTypeJson>,
+        results: Vec<ValueTypeJson>,
+    },
+
+    /// Instance with named exported functions
+    Instance {
+        functions: std::collections::BTreeMap<String, FuncSignatureJson>,
+    },
+}
+impl From<&InterfaceType> for InterfaceTypeJson {
+    fn from(it: &InterfaceType) -> Self {
+        match it {
+            InterfaceType::Func(f) => InterfaceTypeJson::Func {
+                params: f.params.iter().map(|v| v.to_json()).collect(),
+                results: f.results.iter().map(|v| v.to_json()).collect(),
+            },
+            InterfaceType::Instance(inst) => InterfaceTypeJson::Instance {
+                functions: inst.functions.iter().map(|(n, f)| {
+                    (n.clone(), FuncSignatureJson {
+                        params: f.params.iter().map(|v| v.to_json()).collect(),
+                        results: f.results.iter().map(|v| v.to_json()).collect(),
+                    })
+                }).collect(),
+            },
+        }
+    }
+}
+use std::collections::BTreeMap;
+use std::convert::TryFrom;
+
+impl TryFrom<InterfaceTypeJson> for InterfaceType {
+    type Error = String; // you can use anyhow::Error or a custom error type
+
+    fn try_from(json: InterfaceTypeJson) -> Result<Self, Self::Error> {
+        match json {
+            InterfaceTypeJson::Func { params, results } => Ok(InterfaceType::Func(FuncSignature {
+                params: params.into_iter().map(|v| ValueType::try_from(v)).collect::<Result<Vec<_>, _>>()?,
+                results: results.into_iter().map(|v| ValueType::try_from(v)).collect::<Result<Vec<_>, _>>()?,
+            })),
+            InterfaceTypeJson::Instance { functions } => {
+                let mut funcs = BTreeMap::new();
+                for (name, f) in functions {
+                    let sig = FuncSignature {
+                        params: f.params.into_iter().map(|v| ValueType::try_from(v)).collect::<Result<Vec<_>, _>>()?,
+                        results: f.results.into_iter().map(|v| ValueType::try_from(v)).collect::<Result<Vec<_>, _>>()?,
+                    };
+                    funcs.insert(name, sig);
+                }
+                Ok(InterfaceType::Instance(InstanceInterface { functions: funcs }))
+            }
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct FuncSignatureJson {
+    pub params: Vec<ValueTypeJson>,
+    pub results: Vec<ValueTypeJson>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ValueTypeJson {
+    Bool,
+    S8,
+    U8,
+    S16,
+    U16,
+    S32,
+    U32,
+    S64,
+    U64,
+    F32,
+    F64,
+    Char,
+    String,
+    ErrorContext,
+
+    List(Box<ValueTypeJson>),
+    FixedSizeList {
+        elem: Box<ValueTypeJson>,
+        size: u32,
+    },
+    Tuple(Vec<Box<ValueTypeJson>>),
+    Record(Vec<(String, Box<ValueTypeJson>)>),
+    Variant(Vec<(String, Option<Box<ValueTypeJson>>)>),
+    Enum(Vec<String>),
+    Flags(Vec<String>),
+    Option(Box<ValueTypeJson>),
+    Result {
+        ok: Option<Box<ValueTypeJson>>,
+        err: Option<Box<ValueTypeJson>>,
+    },
+    Map {
+        key: Box<ValueTypeJson>,
+        value: Box<ValueTypeJson>,
+    },
+    Resource,
+    AsyncHandle,
+}
+
+impl ValueType {
+    pub fn to_json(&self) -> ValueTypeJson {
+        match self {
+            ValueType::Bool => ValueTypeJson::Bool,
+            ValueType::S8 => ValueTypeJson::S8,
+            ValueType::U8 => ValueTypeJson::U8,
+            ValueType::S16 => ValueTypeJson::S16,
+            ValueType::U16 => ValueTypeJson::U16,
+            ValueType::S32 => ValueTypeJson::S32,
+            ValueType::U32 => ValueTypeJson::U32,
+            ValueType::S64 => ValueTypeJson::S64,
+            ValueType::U64 => ValueTypeJson::U64,
+            ValueType::F32 => ValueTypeJson::F32,
+            ValueType::F64 => ValueTypeJson::F64,
+            ValueType::Char => ValueTypeJson::Char,
+            ValueType::String => ValueTypeJson::String,
+            ValueType::ErrorContext => ValueTypeJson::ErrorContext,
+            ValueType::List(t) => ValueTypeJson::List(Box::new(t.to_json())),
+            ValueType::FixedSizeList(t, n) => ValueTypeJson::FixedSizeList {
+                elem: Box::new(t.to_json()),
+                size: *n,
+            },
+            ValueType::Tuple(ts) => ValueTypeJson::Tuple(ts.iter().map(|v| Box::new(v.to_json())).collect()),
+            ValueType::Record(fields) => ValueTypeJson::Record(
+                fields.iter().map(|(n,v)| (n.clone(), Box::new(v.to_json()))).collect()
+            ),
+            ValueType::Variant(cases) => ValueTypeJson::Variant(
+                cases.iter()
+                    .map(|(n,v)| (n.clone(), v.as_ref().map(|v| Box::new(v.to_json()))))
+                    .collect::<Vec<(String, Option<Box<ValueTypeJson>>)>>()
+            ),
+            ValueType::Enum(names) => ValueTypeJson::Enum(names.clone()),
+            ValueType::Flags(names) => ValueTypeJson::Flags(names.clone()),
+            ValueType::Option(t) => ValueTypeJson::Option(Box::new(t.to_json())),
+            ValueType::Result { ok, err } => ValueTypeJson::Result {
+                ok: ok.as_ref().map(|v| Box::new(v.to_json())),
+                err: err.as_ref().map(|v| Box::new(v.to_json())),
+            },
+            ValueType::Map(k, v) => ValueTypeJson::Map {
+                key: Box::new(k.to_json()),
+                value: Box::new(v.to_json()),
+            },
+            ValueType::Resource => ValueTypeJson::Resource,
+            ValueType::AsyncHandle => ValueTypeJson::AsyncHandle,
+        }
+    }
+}
+
+use serde::ser::{Serializer, SerializeMap};
+
+impl Serialize for ValueTypeJson {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            ValueTypeJson::Bool => serializer.serialize_unit_variant("ValueTypeJson", 0, "bool"),
+            ValueTypeJson::List(inner) => inner.serialize(serializer),
+            ValueTypeJson::Tuple(items) => {
+                let vec: Vec<&ValueTypeJson> = items.iter().map(|b| b.as_ref()).collect();
+                vec.serialize(serializer)
+            },
+            ValueTypeJson::Record(fields) => {
+                let mut map = serializer.serialize_map(Some(fields.len()))?;
+                for (name, val) in fields {
+                    map.serialize_entry(name, val)?;
+                }
+                map.end()
+            },
+            _ => serializer.serialize_str(&format!("{:?}", self)),
+        }
+    }
+}
+
+
+impl TryFrom<ValueTypeJson> for ValueType {
+    type Error = String;
+
+    fn try_from(json: ValueTypeJson) -> Result<Self, Self::Error> {
+        match json {
+            ValueTypeJson::Bool => Ok(ValueType::Bool),
+            ValueTypeJson::S8 => Ok(ValueType::S8),
+            ValueTypeJson::U8 => Ok(ValueType::U8),
+            ValueTypeJson::S16 => Ok(ValueType::S16),
+            ValueTypeJson::U16 => Ok(ValueType::U16),
+            ValueTypeJson::S32 => Ok(ValueType::S32),
+            ValueTypeJson::U32 => Ok(ValueType::U32),
+            ValueTypeJson::S64 => Ok(ValueType::S64),
+            ValueTypeJson::U64 => Ok(ValueType::U64),
+            ValueTypeJson::F32 => Ok(ValueType::F32),
+            ValueTypeJson::F64 => Ok(ValueType::F64),
+            ValueTypeJson::Char => Ok(ValueType::Char),
+            ValueTypeJson::String => Ok(ValueType::String),
+            ValueTypeJson::ErrorContext => Ok(ValueType::ErrorContext),
+
+            ValueTypeJson::List(t) => {
+                let inner: ValueType = (*t).try_into()?;
+                Ok(ValueType::List(Box::new(inner)))
+            }
+            ValueTypeJson::FixedSizeList { elem, size } => {
+                let inner: ValueType = (*elem).try_into()?;
+                Ok(ValueType::FixedSizeList(Box::new(inner), size))
+            }
+            ValueTypeJson::Tuple(ts) => {
+                Ok(ValueType::Tuple(ts.into_iter().map(|v| (*v).try_into()).collect::<Result<Vec<_>, _>>()?))
+            }
+            ValueTypeJson::Record(fields) => {
+                let vec: Vec<(String, ValueType)> = fields
+                    .into_iter()
+                    .map(|(n, v)| Ok::<(String, ValueType), String>((n, (*v).try_into()?)))
+                    .collect::<Result<_, String>>()?;
+                Ok(ValueType::Record(vec))
+            }
+            ValueTypeJson::Variant(cases) => {
+                let vec: Vec<(String, Option<ValueType>)> = cases
+                    .into_iter()
+                    .map(|(n, v)| {
+                        let value: Option<ValueType> = match v {
+                            Some(v) => Some((*v).try_into()?),
+                            None => None,
+                        };
+                        Ok::<(String, Option<ValueType>), String>((n, value))
+                    })
+                    .collect::<Result<_, String>>()?;
+                Ok(ValueType::Variant(vec))
+            }
+            ValueTypeJson::Enum(names) => Ok(ValueType::Enum(names)),
+            ValueTypeJson::Flags(names) => Ok(ValueType::Flags(names)),
+            ValueTypeJson::Option(t) => {
+                let inner: ValueType = (*t).try_into()?;
+                Ok(ValueType::Option(Box::new(inner)))
+            }
+            ValueTypeJson::Result { ok, err } => {
+                let ok_val = match ok {
+                    Some(v) => Some(Box::new((*v).try_into()?)),
+                    None => None,
+                };
+                let err_val = match err {
+                    Some(v) => Some(Box::new((*v).try_into()?)),
+                    None => None,
+                };
+                Ok(ValueType::Result { ok: ok_val, err: err_val })
+            }
+            ValueTypeJson::Map { key, value } => {
+                let k: ValueType = (*key).try_into()?;
+                let v: ValueType = (*value).try_into()?;
+                Ok(ValueType::Map(Box::new(k), Box::new(v)))
+            }
+
+            ValueTypeJson::Resource => Ok(ValueType::Resource),
+            ValueTypeJson::AsyncHandle => Ok(ValueType::AsyncHandle),
+        }
+    }
+}
+
+
 
 #[derive(Deserialize, Serialize)]
 pub struct JsonExport {
@@ -93,6 +433,8 @@ mod tests {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
             source_instance: 0,
             is_host_import: true,
+            interface_type: None,
+            fingerprint: None
         });
         graph.add_node(1, srv);
 
@@ -101,11 +443,15 @@ mod tests {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
             source_instance: 1,
             is_host_import: false,
+            interface_type: None,
+            fingerprint: None
         });
         mw.add_import(InterfaceConnection {
             interface_name: "wasi:logging/log@0.1.0".to_string(),
             source_instance: 0,
             is_host_import: true,
+            interface_type: None,
+            fingerprint: None
         });
         graph.add_node(2, mw);
 

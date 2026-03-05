@@ -1,4 +1,4 @@
-use crate::model::{ComponentNode, CompositionGraph, InterfaceConnection};
+use crate::model::{ComponentNode, CompositionGraph, InterfaceConnection, InterfaceType};
 use crate::output::json::JsonCompositionGraph;
 use serde::de::Error;
 use std::fs::File;
@@ -22,16 +22,16 @@ pub fn parse_json_str(json: &str) -> anyhow::Result<CompositionGraph> {
 impl CompositionGraph {
     fn from_json_str(input: &str) -> Result<Self, serde_json::Error> {
         let model: JsonCompositionGraph = serde_json::from_str(input)?;
-        Ok(Self::from_json_model(model))
+        Self::from_json_model(model)
     }
     fn from_json_reader<R: std::io::Read>(reader: R) -> Result<Self, serde_json::Error> {
         let model: JsonCompositionGraph = serde_json::from_reader(reader)?;
-        Ok(Self::from_json_model(model))
+        Self::from_json_model(model)
     }
 }
 
 impl CompositionGraph {
-    fn from_json_model(model: JsonCompositionGraph) -> Self {
+    fn from_json_model(model: JsonCompositionGraph) -> Result<Self, serde_json::Error> {
         use std::collections::BTreeMap;
 
         let mut nodes = BTreeMap::new();
@@ -44,14 +44,25 @@ impl CompositionGraph {
             );
 
             for conn in json_node.imports {
+                let interface_type = match conn.interface_type {
+                    Some(json_ty) => Some(InterfaceType::try_from(json_ty).map_err(|e| serde_json::Error::custom(format!(
+                        "Failed to parse interface_type for {}: {}",
+                        conn.interface, e
+                    )))?),
+                    None => None,
+                };
+
                 let connection = InterfaceConnection {
                     interface_name: conn.interface,
                     source_instance: conn.source_instance,
                     is_host_import: conn.is_host_import,
+                    interface_type,
+                    fingerprint: conn.fingerprint,
                 };
 
                 node.add_import(connection);
             }
+
 
             nodes.insert(json_node.id, node);
         }
@@ -61,9 +72,9 @@ impl CompositionGraph {
             component_exports.insert(export.interface, export.source_instance);
         }
 
-        CompositionGraph {
+        Ok(CompositionGraph {
             nodes,
             component_exports,
-        }
+        })
     }
 }
