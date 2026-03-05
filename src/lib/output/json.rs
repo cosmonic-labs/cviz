@@ -1,58 +1,12 @@
-use crate::model::{CompositionGraph, FuncSignature, InstanceInterface, InterfaceConnection, InterfaceType, ValueType};
+use crate::model::{
+    CompositionGraph, InterfaceConnection, InterfaceType, TypeArena, TypeId, ValueType,
+};
 use serde::{Deserialize, Serialize};
-
-/// Generate JSON from the composition graph
-// pub fn generate_json(graph: &CompositionGraph, pretty: bool) -> Result<String, serde_json::Error> {
-//     let model = generate_json_model(graph);
-//     if pretty {
-//         serde_json::to_string_pretty(&model)
-//     } else {
-//         serde_json::to_string(&model)
-//     }
-// }
-//
-// fn generate_json_model(graph: &CompositionGraph) -> JsonCompositionGraph {
-//     let nodes = graph
-//         .nodes
-//         .iter()
-//         .map(|(id, node)| JsonNode {
-//             id: *id,
-//             name: node.display_label().to_string(),
-//             component_index: node.component_index,
-//             component_num: node.component_num,
-//             imports: node
-//                 .imports
-//                 .iter()
-//                 .map(|conn| JsonInterfaceConnection {
-//                     interface: conn.interface_name.clone(),
-//                     short: conn.short_label(),
-//                     source_instance: conn.source_instance,
-//                     is_host_import: conn.is_host_import,
-//                     interface_type: conn.interface_type.as_ref().map(|t| t.into()),
-//                     fingerprint: conn.fingerprint.clone(),
-//                 })
-//                 .collect(),
-//         })
-//         .collect();
-//
-//     let exports = graph
-//         .component_exports
-//         .iter()
-//         .map(|(iface, src)| JsonExport {
-//             interface: iface.clone(),
-//             source_instance: *src,
-//         })
-//         .collect();
-//
-//     JsonCompositionGraph {
-//         version: 1,
-//         nodes,
-//         exports,
-//     }
-// }
 
 /// Generate a flattened JSON model from the composition graph
 fn generate_json_model(graph: &CompositionGraph) -> JsonCompositionGraph {
+    let arena = &graph.arena;
+
     let nodes = graph
         .nodes
         .iter()
@@ -64,7 +18,7 @@ fn generate_json_model(graph: &CompositionGraph) -> JsonCompositionGraph {
             imports: node
                 .imports
                 .iter()
-                .map(JsonInterfaceConnection::from) // use your From impl
+                .map(|ic| JsonInterfaceConnection::from_ir(ic, arena))
                 .collect(),
         })
         .collect();
@@ -97,7 +51,6 @@ pub fn generate_json(graph: &CompositionGraph, pretty: bool) -> Result<String, s
         serde_json::to_string(&model)
     }
 }
-
 
 #[derive(Deserialize, Serialize)]
 pub struct JsonCompositionGraph {
@@ -137,14 +90,17 @@ pub struct JsonInterfaceConnection {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
 }
-impl From<&InterfaceConnection> for JsonInterfaceConnection {
-    fn from(ic: &InterfaceConnection) -> Self {
+impl JsonInterfaceConnection {
+    pub fn from_ir(ic: &InterfaceConnection, arena: &TypeArena) -> Self {
         JsonInterfaceConnection {
             interface: ic.interface_name.clone(),
             short: ic.short_label(),
             source_instance: ic.source_instance,
             is_host_import: ic.is_host_import,
-            interface_type: ic.interface_type.as_ref().map(|t| t.into()),
+            interface_type: ic
+                .interface_type
+                .as_ref()
+                .map(|t| InterfaceTypeJson::from_ir(t, arena)),
             fingerprint: ic.fingerprint.clone(),
         }
     }
@@ -164,47 +120,41 @@ pub enum InterfaceTypeJson {
         functions: std::collections::BTreeMap<String, FuncSignatureJson>,
     },
 }
-impl From<&InterfaceType> for InterfaceTypeJson {
-    fn from(it: &InterfaceType) -> Self {
+impl InterfaceTypeJson {
+    pub fn from_ir(it: &InterfaceType, arena: &TypeArena) -> Self {
         match it {
             InterfaceType::Func(f) => InterfaceTypeJson::Func {
-                params: f.params.iter().map(|v| v.to_json()).collect(),
-                results: f.results.iter().map(|v| v.to_json()).collect(),
+                params: f.params.iter().map(|t| typeid_to_json(*t, arena)).collect(),
+                results: f
+                    .results
+                    .iter()
+                    .map(|t| typeid_to_json(*t, arena))
+                    .collect(),
             },
+
             InterfaceType::Instance(inst) => InterfaceTypeJson::Instance {
-                functions: inst.functions.iter().map(|(n, f)| {
-                    (n.clone(), FuncSignatureJson {
-                        params: f.params.iter().map(|v| v.to_json()).collect(),
-                        results: f.results.iter().map(|v| v.to_json()).collect(),
+                functions: inst
+                    .functions
+                    .iter()
+                    .map(|(n, f)| {
+                        (
+                            n.clone(),
+                            FuncSignatureJson {
+                                params: f
+                                    .params
+                                    .iter()
+                                    .map(|t| typeid_to_json(*t, arena))
+                                    .collect(),
+                                results: f
+                                    .results
+                                    .iter()
+                                    .map(|t| typeid_to_json(*t, arena))
+                                    .collect(),
+                            },
+                        )
                     })
-                }).collect(),
+                    .collect(),
             },
-        }
-    }
-}
-use std::collections::BTreeMap;
-use std::convert::TryFrom;
-
-impl TryFrom<InterfaceTypeJson> for InterfaceType {
-    type Error = String; // you can use anyhow::Error or a custom error type
-
-    fn try_from(json: InterfaceTypeJson) -> Result<Self, Self::Error> {
-        match json {
-            InterfaceTypeJson::Func { params, results } => Ok(InterfaceType::Func(FuncSignature {
-                params: params.into_iter().map(|v| ValueType::try_from(v)).collect::<Result<Vec<_>, _>>()?,
-                results: results.into_iter().map(|v| ValueType::try_from(v)).collect::<Result<Vec<_>, _>>()?,
-            })),
-            InterfaceTypeJson::Instance { functions } => {
-                let mut funcs = BTreeMap::new();
-                for (name, f) in functions {
-                    let sig = FuncSignature {
-                        params: f.params.into_iter().map(|v| ValueType::try_from(v)).collect::<Result<Vec<_>, _>>()?,
-                        results: f.results.into_iter().map(|v| ValueType::try_from(v)).collect::<Result<Vec<_>, _>>()?,
-                    };
-                    funcs.insert(name, sig);
-                }
-                Ok(InterfaceType::Instance(InstanceInterface { functions: funcs }))
-            }
         }
     }
 }
@@ -256,55 +206,72 @@ pub enum ValueTypeJson {
     AsyncHandle,
 }
 
-impl ValueType {
-    pub fn to_json(&self) -> ValueTypeJson {
-        match self {
-            ValueType::Bool => ValueTypeJson::Bool,
-            ValueType::S8 => ValueTypeJson::S8,
-            ValueType::U8 => ValueTypeJson::U8,
-            ValueType::S16 => ValueTypeJson::S16,
-            ValueType::U16 => ValueTypeJson::U16,
-            ValueType::S32 => ValueTypeJson::S32,
-            ValueType::U32 => ValueTypeJson::U32,
-            ValueType::S64 => ValueTypeJson::S64,
-            ValueType::U64 => ValueTypeJson::U64,
-            ValueType::F32 => ValueTypeJson::F32,
-            ValueType::F64 => ValueTypeJson::F64,
-            ValueType::Char => ValueTypeJson::Char,
-            ValueType::String => ValueTypeJson::String,
-            ValueType::ErrorContext => ValueTypeJson::ErrorContext,
-            ValueType::List(t) => ValueTypeJson::List(Box::new(t.to_json())),
-            ValueType::FixedSizeList(t, n) => ValueTypeJson::FixedSizeList {
-                elem: Box::new(t.to_json()),
-                size: *n,
-            },
-            ValueType::Tuple(ts) => ValueTypeJson::Tuple(ts.iter().map(|v| Box::new(v.to_json())).collect()),
-            ValueType::Record(fields) => ValueTypeJson::Record(
-                fields.iter().map(|(n,v)| (n.clone(), Box::new(v.to_json()))).collect()
-            ),
-            ValueType::Variant(cases) => ValueTypeJson::Variant(
-                cases.iter()
-                    .map(|(n,v)| (n.clone(), v.as_ref().map(|v| Box::new(v.to_json()))))
-                    .collect::<Vec<(String, Option<Box<ValueTypeJson>>)>>()
-            ),
-            ValueType::Enum(names) => ValueTypeJson::Enum(names.clone()),
-            ValueType::Flags(names) => ValueTypeJson::Flags(names.clone()),
-            ValueType::Option(t) => ValueTypeJson::Option(Box::new(t.to_json())),
-            ValueType::Result { ok, err } => ValueTypeJson::Result {
-                ok: ok.as_ref().map(|v| Box::new(v.to_json())),
-                err: err.as_ref().map(|v| Box::new(v.to_json())),
-            },
-            ValueType::Map(k, v) => ValueTypeJson::Map {
-                key: Box::new(k.to_json()),
-                value: Box::new(v.to_json()),
-            },
-            ValueType::Resource => ValueTypeJson::Resource,
-            ValueType::AsyncHandle => ValueTypeJson::AsyncHandle,
-        }
+pub fn typeid_to_json(id: TypeId, arena: &TypeArena) -> ValueTypeJson {
+    match &arena.get(id) {
+        ValueType::Bool => ValueTypeJson::Bool,
+        ValueType::S8 => ValueTypeJson::S8,
+        ValueType::U8 => ValueTypeJson::U8,
+        ValueType::S16 => ValueTypeJson::S16,
+        ValueType::U16 => ValueTypeJson::U16,
+        ValueType::S32 => ValueTypeJson::S32,
+        ValueType::U32 => ValueTypeJson::U32,
+        ValueType::S64 => ValueTypeJson::S64,
+        ValueType::U64 => ValueTypeJson::U64,
+        ValueType::F32 => ValueTypeJson::F32,
+        ValueType::F64 => ValueTypeJson::F64,
+        ValueType::Char => ValueTypeJson::Char,
+        ValueType::String => ValueTypeJson::String,
+        ValueType::ErrorContext => ValueTypeJson::ErrorContext,
+
+        ValueType::List(inner) => ValueTypeJson::List(Box::new(typeid_to_json(*inner, arena))),
+
+        ValueType::FixedSizeList(inner, n) => ValueTypeJson::FixedSizeList {
+            elem: Box::new(typeid_to_json(*inner, arena)),
+            size: *n,
+        },
+
+        ValueType::Tuple(items) => ValueTypeJson::Tuple(
+            items
+                .iter()
+                .map(|t| Box::new(typeid_to_json(*t, arena)))
+                .collect(),
+        ),
+
+        ValueType::Record(fields) => ValueTypeJson::Record(
+            fields
+                .iter()
+                .map(|(n, t)| (n.clone(), Box::new(typeid_to_json(*t, arena))))
+                .collect(),
+        ),
+
+        ValueType::Variant(cases) => ValueTypeJson::Variant(
+            cases
+                .iter()
+                .map(|(n, t)| (n.clone(), t.map(|t| Box::new(typeid_to_json(t, arena)))))
+                .collect(),
+        ),
+
+        ValueType::Enum(names) => ValueTypeJson::Enum(names.clone()),
+        ValueType::Flags(names) => ValueTypeJson::Flags(names.clone()),
+
+        ValueType::Option(inner) => ValueTypeJson::Option(Box::new(typeid_to_json(*inner, arena))),
+
+        ValueType::Result { ok, err } => ValueTypeJson::Result {
+            ok: ok.map(|t| Box::new(typeid_to_json(t, arena))),
+            err: err.map(|t| Box::new(typeid_to_json(t, arena))),
+        },
+
+        ValueType::Map(k, v) => ValueTypeJson::Map {
+            key: Box::new(typeid_to_json(*k, arena)),
+            value: Box::new(typeid_to_json(*v, arena)),
+        },
+
+        ValueType::Resource => ValueTypeJson::Resource,
+        ValueType::AsyncHandle => ValueTypeJson::AsyncHandle,
     }
 }
 
-use serde::ser::{Serializer, SerializeMap};
+use serde::ser::{SerializeMap, Serializer};
 
 impl Serialize for ValueTypeJson {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -317,101 +284,18 @@ impl Serialize for ValueTypeJson {
             ValueTypeJson::Tuple(items) => {
                 let vec: Vec<&ValueTypeJson> = items.iter().map(|b| b.as_ref()).collect();
                 vec.serialize(serializer)
-            },
+            }
             ValueTypeJson::Record(fields) => {
                 let mut map = serializer.serialize_map(Some(fields.len()))?;
                 for (name, val) in fields {
                     map.serialize_entry(name, val)?;
                 }
                 map.end()
-            },
+            }
             _ => serializer.serialize_str(&format!("{:?}", self)),
         }
     }
 }
-
-
-impl TryFrom<ValueTypeJson> for ValueType {
-    type Error = String;
-
-    fn try_from(json: ValueTypeJson) -> Result<Self, Self::Error> {
-        match json {
-            ValueTypeJson::Bool => Ok(ValueType::Bool),
-            ValueTypeJson::S8 => Ok(ValueType::S8),
-            ValueTypeJson::U8 => Ok(ValueType::U8),
-            ValueTypeJson::S16 => Ok(ValueType::S16),
-            ValueTypeJson::U16 => Ok(ValueType::U16),
-            ValueTypeJson::S32 => Ok(ValueType::S32),
-            ValueTypeJson::U32 => Ok(ValueType::U32),
-            ValueTypeJson::S64 => Ok(ValueType::S64),
-            ValueTypeJson::U64 => Ok(ValueType::U64),
-            ValueTypeJson::F32 => Ok(ValueType::F32),
-            ValueTypeJson::F64 => Ok(ValueType::F64),
-            ValueTypeJson::Char => Ok(ValueType::Char),
-            ValueTypeJson::String => Ok(ValueType::String),
-            ValueTypeJson::ErrorContext => Ok(ValueType::ErrorContext),
-
-            ValueTypeJson::List(t) => {
-                let inner: ValueType = (*t).try_into()?;
-                Ok(ValueType::List(Box::new(inner)))
-            }
-            ValueTypeJson::FixedSizeList { elem, size } => {
-                let inner: ValueType = (*elem).try_into()?;
-                Ok(ValueType::FixedSizeList(Box::new(inner), size))
-            }
-            ValueTypeJson::Tuple(ts) => {
-                Ok(ValueType::Tuple(ts.into_iter().map(|v| (*v).try_into()).collect::<Result<Vec<_>, _>>()?))
-            }
-            ValueTypeJson::Record(fields) => {
-                let vec: Vec<(String, ValueType)> = fields
-                    .into_iter()
-                    .map(|(n, v)| Ok::<(String, ValueType), String>((n, (*v).try_into()?)))
-                    .collect::<Result<_, String>>()?;
-                Ok(ValueType::Record(vec))
-            }
-            ValueTypeJson::Variant(cases) => {
-                let vec: Vec<(String, Option<ValueType>)> = cases
-                    .into_iter()
-                    .map(|(n, v)| {
-                        let value: Option<ValueType> = match v {
-                            Some(v) => Some((*v).try_into()?),
-                            None => None,
-                        };
-                        Ok::<(String, Option<ValueType>), String>((n, value))
-                    })
-                    .collect::<Result<_, String>>()?;
-                Ok(ValueType::Variant(vec))
-            }
-            ValueTypeJson::Enum(names) => Ok(ValueType::Enum(names)),
-            ValueTypeJson::Flags(names) => Ok(ValueType::Flags(names)),
-            ValueTypeJson::Option(t) => {
-                let inner: ValueType = (*t).try_into()?;
-                Ok(ValueType::Option(Box::new(inner)))
-            }
-            ValueTypeJson::Result { ok, err } => {
-                let ok_val = match ok {
-                    Some(v) => Some(Box::new((*v).try_into()?)),
-                    None => None,
-                };
-                let err_val = match err {
-                    Some(v) => Some(Box::new((*v).try_into()?)),
-                    None => None,
-                };
-                Ok(ValueType::Result { ok: ok_val, err: err_val })
-            }
-            ValueTypeJson::Map { key, value } => {
-                let k: ValueType = (*key).try_into()?;
-                let v: ValueType = (*value).try_into()?;
-                Ok(ValueType::Map(Box::new(k), Box::new(v)))
-            }
-
-            ValueTypeJson::Resource => Ok(ValueType::Resource),
-            ValueTypeJson::AsyncHandle => Ok(ValueType::AsyncHandle),
-        }
-    }
-}
-
-
 
 #[derive(Deserialize, Serialize)]
 pub struct JsonExport {
@@ -434,7 +318,7 @@ mod tests {
             source_instance: 0,
             is_host_import: true,
             interface_type: None,
-            fingerprint: None
+            fingerprint: None,
         });
         graph.add_node(1, srv);
 
@@ -444,14 +328,14 @@ mod tests {
             source_instance: 1,
             is_host_import: false,
             interface_type: None,
-            fingerprint: None
+            fingerprint: None,
         });
         mw.add_import(InterfaceConnection {
             interface_name: "wasi:logging/log@0.1.0".to_string(),
             source_instance: 0,
             is_host_import: true,
             interface_type: None,
-            fingerprint: None
+            fingerprint: None,
         });
         graph.add_node(2, mw);
 

@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct TypeId(u32);
@@ -7,20 +7,52 @@ pub struct TypeId(u32);
 /// Sentinel value for synthetic component instances (e.g., export wrappers)
 pub const SYNTHETIC_COMPONENT: u32 = u32::MAX;
 
-/// Represents a component instance in the composition
+/// Represents a single component instance within a [`CompositionGraph`].
+///
+/// Each node corresponds to one instantiation of a component from the
+/// component section of the WebAssembly binary. Multiple nodes may refer
+/// to the same `component_index` if the component is instantiated more
+/// than once.
+///
+/// A node primarily records:
+/// - the component being instantiated
+/// - the instance name used in the composition
+/// - the interfaces it imports from other instances or the host
+///
+/// The actual wiring between instances is represented by
+/// [`InterfaceConnection`] values in the `imports` list.
 #[derive(Debug, Clone)]
 pub struct ComponentNode {
-    /// Instance name (e.g., "$srv", "$mdl-a")
+    /// Instance name as it appears in the composition graph.
+    ///
+    /// Examples:
+    /// - `"$srv"`
+    /// - `"$router"`
+    /// - `"$mdl-a"`
+    ///
+    /// The `$` prefix follows the internal naming convention used when
+    /// reconstructing instance identifiers from the component model.
     pub name: String,
-    /// Which component is being instantiated
+
+    /// Index of the component being instantiated.
+    ///
+    /// This corresponds to the component index referenced by the
+    /// `instantiate` instruction in the component model.
     pub component_index: u32,
-    /// Which component is being instantiated, these are numbered
-    /// from 0->N in order of the components as they show up in the binary!
+
+    /// Sequential number of the component within the binary.
+    ///
+    /// Components are numbered from `0..N` in the order they appear in the
+    /// binary. This provides a stable ordering useful for visualization and
+    /// debugging.
     pub component_num: u32,
-    /// List of interface connections (what it receives)
+
+    /// Interfaces imported by this instance.
+    ///
+    /// Each entry describes a dependency on another instance or the host.
+    /// These connections define the edges of the composition graph.
     pub imports: Vec<InterfaceConnection>,
 }
-
 impl ComponentNode {
     pub fn new(name: String, component_index: u32, component_num: u32) -> Self {
         Self {
@@ -41,17 +73,57 @@ impl ComponentNode {
     }
 }
 
-/// Represents wiring between instances
+/// Represents a single interface wiring between component instances.
+///
+/// An `InterfaceConnection` indicates that a component instance imports
+/// a particular interface and identifies the instance (or host) that
+/// provides it.
+///
+/// Conceptually, this is a directed edge in the composition graph:
+///
+/// ```text
+/// source_instance -- provides --> target_instance
+/// ```
+///
+/// Where `target_instance` is the [`ComponentNode`] containing this
+/// connection.
 #[derive(Debug, Clone)]
 pub struct InterfaceConnection {
-    /// e.g., "wasi:http/handler@0.3.0-rc-2026-01-06"
+    /// Fully-qualified interface name.
+    ///
+    /// Examples:
+    /// - `"wasi:http/handler@0.3.0-rc-2026-01-06"`
+    /// - `"my:service/router"`
     pub interface_name: String,
-    /// Which instance provides this
+
+    /// Instance index providing this interface.
+    ///
+    /// This corresponds to the key of another [`ComponentNode`] in the
+    /// [`CompositionGraph::nodes`] map.
     pub source_instance: u32,
-    /// Whether this comes from the host
+
+    /// Whether this interface is provided by the host rather than another
+    /// component instance.
+    ///
+    /// When `true`, `source_instance` refers to a synthetic host provider
+    /// rather than an actual node in the graph.
     pub is_host_import: bool,
 
+    /// Structured description of the interface, if available.
+    ///
+    /// This contains the parsed function signatures of the interface and
+    /// is used for compatibility checking, fingerprint generation, and
+    /// visualization.
+    ///
+    /// Some connections may omit this if type information was not available
+    /// during graph construction.
     pub interface_type: Option<InterfaceType>,
+
+    /// Deterministic fingerprint of the interface type.
+    ///
+    /// Fingerprints are typically computed from a canonical representation
+    /// of the interface signature and can be used to quickly determine
+    /// whether two interfaces are structurally identical.
     pub fingerprint: Option<String>,
 }
 
@@ -60,10 +132,9 @@ impl InterfaceConnection {
         interface_name: String,
         source_instance: u32,
         interface_type: Option<InterfaceType>,
+        arena: &TypeArena,
     ) -> Self {
-        let fingerprint = interface_type
-            .as_ref()
-            .map(|t| t.fingerprint());
+        let fingerprint = interface_type.as_ref().map(|t| t.fingerprint(arena));
 
         Self {
             interface_name,
@@ -74,34 +145,98 @@ impl InterfaceConnection {
         }
     }
 
+    /// Checks whether this connection is type-compatible with another.
+    ///
+    /// Compatibility is determined by comparing the deterministic fingerprints
+    /// of the interface types. If both connections have the same fingerprint,
+    /// they are considered compatible, meaning they have structurally identical
+    /// signatures.
+    ///
+    /// # Parameters
+    ///
+    /// - `other`: The interface connection to compare against.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the fingerprints match, `false` otherwise.
+    ///
+    /// # Notes
+    ///
+    /// - If either connection lacks a fingerprint (`fingerprint` is `None`),
+    ///   this method will return `false`.
+    /// - Fingerprints are computed from the canonical representation of the
+    ///   interface type and capture full type structure, including nested
+    ///   functions and instances.
+    pub fn compatible_with(&self, other: &InterfaceConnection) -> bool {
+        compatible_fingerprints(&self.fingerprint, &other.fingerprint)
+    }
+
     /// Get a short label for the interface (just the interface name without package/version)
     pub fn short_label(&self) -> String {
         short_interface_name(&self.interface_name)
     }
 }
 
+pub fn compatible_fingerprints(f0: &Option<String>, f1: &Option<String>) -> bool {
+    f0 == f1
+}
+
+/// Describes the structure of an imported or exported interface.
+///
+/// Interfaces in the WebAssembly component model may either be:
+///
+/// - a **single function**
+/// - an **instance** containing multiple named functions
+///
+/// This enum captures both possibilities.
 #[derive(Debug, Clone)]
 pub enum InterfaceType {
+    /// A WIT instance interface containing multiple exported functions.
     Instance(InstanceInterface),
+
+    /// A single function interface.
     Func(FuncSignature),
 }
 impl InterfaceType {
-    pub fn fingerprint(&self) -> String {
-        let s = canonical_interface(self);
+    pub fn fingerprint(&self, arena: &TypeArena) -> String {
+        let s = canonical_interface(self, arena);
         let hash = Sha256::digest(s.as_bytes());
         hex::encode(hash)
     }
 }
 
+/// Describes an instance-style interface consisting of multiple functions.
+///
+/// Each entry maps a function name to its corresponding [`FuncSignature`].
+/// This mirrors the structure of WIT interfaces where functions are
+/// exported from an instance namespace.
 #[derive(Debug, Clone)]
 pub struct InstanceInterface {
+    /// Functions exported by this interface instance.
+    ///
+    /// Keys are function names and values describe their signatures.
     pub functions: BTreeMap<String, FuncSignature>,
 }
 
+/// Represents the signature of a function in an interface.
+///
+/// Parameter and result types are stored as [`TypeId`] values referencing
+/// entries in the graph's global [`TypeArena`]. This avoids storing
+/// recursive type structures inline and enables efficient deduplication
+/// and comparison of types.
 #[derive(Debug, Clone)]
 pub struct FuncSignature {
-    pub params: Vec<ValueType>,
-    pub results: Vec<ValueType>,
+    /// Parameter types of the function.
+    ///
+    /// Each entry is a [`TypeId`] referring to a value type stored in the
+    /// graph's type arena.
+    pub params: Vec<TypeId>,
+
+    /// Result types of the function.
+    ///
+    /// Multiple results are supported to match the WebAssembly component
+    /// model.
+    pub results: Vec<TypeId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -124,98 +259,24 @@ pub enum ValueType {
     Resource,
     AsyncHandle,
 
-    List(Box<ValueType>),
-    FixedSizeList(Box<ValueType>, u32),
-    Tuple(Vec<ValueType>),
-    Record(Vec<(String, ValueType)>),
-    Variant(Vec<(String, Option<ValueType>)>),
+    List(TypeId),
+    FixedSizeList(TypeId, u32),
+    Tuple(Vec<TypeId>),
+    Record(Vec<(String, TypeId)>),
+    Variant(Vec<(String, Option<TypeId>)>),
     Enum(Vec<String>),
-    Option(Box<ValueType>),
+    Option(TypeId),
     Result {
-        ok: Option<Box<ValueType>>,
-        err: Option<Box<ValueType>>,
+        ok: Option<TypeId>,
+        err: Option<TypeId>,
     },
     Flags(Vec<String>),
-    Map(Box<ValueType>, Box<ValueType>),
-}
-impl ValueType {
-    pub fn canonical(&self) -> String {
-        match self {
-            ValueType::Map(k, v) =>
-                format!("map<{},{}>", k.canonical(), v.canonical()),
-
-            ValueType::FixedSizeList(t, n) =>
-                format!("array{}<{}>", n, t.canonical()),
-
-            ValueType::List(t) =>
-                format!("list<{}>", t.canonical()),
-
-            ValueType::Option(t) =>
-                format!("option<{}>", t.canonical()),
-
-            ValueType::Tuple(ts) =>
-                format!("tuple({})",
-                        ts.iter()
-                            .map(|t| t.canonical())
-                            .collect::<Vec<_>>()
-                            .join(",")),
-
-            ValueType::Record(fields) =>
-                format!("record{{{}}}",
-                        fields.iter()
-                            .map(|(n,t)| format!("{}:{}", n, t.canonical()))
-                            .collect::<Vec<_>>()
-                            .join(",")),
-
-            ValueType::Variant(cases) =>
-                format!("variant{{{}}}",
-                        cases.iter()
-                            .map(|(n,t)| match t {
-                                Some(t) => format!("{}:{}", n, t.canonical()),
-                                None => n.clone(),
-                            })
-                            .collect::<Vec<_>>()
-                            .join(",")),
-
-            ValueType::Enum(names) =>
-                format!("enum{{{}}}", names.join(",")),
-
-            ValueType::Flags(names) =>
-                format!("flags{{{}}}", names.join(",")),
-
-            ValueType::Result { ok, err } =>
-                format!(
-                    "result<{},{}>",
-                    ok.as_ref().map(|t| t.canonical()).unwrap_or("_".into()),
-                    err.as_ref().map(|t| t.canonical()).unwrap_or("_".into())
-                ),
-
-            // resource handles
-            ValueType::Resource => "resource".into(),
-            ValueType::AsyncHandle => "async_handle".into(),
-
-            // primitives
-            ValueType::Bool => "bool".into(),
-            ValueType::S8 => "s8".into(),
-            ValueType::U8 => "u8".into(),
-            ValueType::S16 => "s16".into(),
-            ValueType::U16 => "u16".into(),
-            ValueType::S32 => "s32".into(),
-            ValueType::U32 => "u32".into(),
-            ValueType::S64 => "s64".into(),
-            ValueType::U64 => "u64".into(),
-            ValueType::F32 => "f32".into(),
-            ValueType::F64 => "f64".into(),
-            ValueType::Char => "char".into(),
-            ValueType::String => "string".into(),
-            ValueType::ErrorContext => "error-context".into(),
-        }
-    }
+    Map(TypeId, TypeId),
 }
 
-fn canonical_interface(iface: &InterfaceType) -> String {
+fn canonical_interface(iface: &InterfaceType, arena: &TypeArena) -> String {
     match iface {
-        InterfaceType::Func(f) => canonical_func(f),
+        InterfaceType::Func(f) => canonical_func(f, arena),
 
         InterfaceType::Instance(inst) => {
             let mut funcs: Vec<_> = inst.functions.iter().collect();
@@ -226,7 +287,7 @@ fn canonical_interface(iface: &InterfaceType) -> String {
             for (name, func) in funcs {
                 out.push_str(name);
                 out.push(':');
-                out.push_str(&canonical_func(func));
+                out.push_str(&canonical_func(func, arena));
                 out.push(';');
             }
 
@@ -236,14 +297,14 @@ fn canonical_interface(iface: &InterfaceType) -> String {
     }
 }
 
-fn canonical_func(f: &FuncSignature) -> String {
+fn canonical_func(f: &FuncSignature, arena: &TypeArena) -> String {
     let mut out = String::from("func(");
 
     for (i, p) in f.params.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
-        out.push_str(&p.canonical());
+        out.push_str(&arena.canonical(*p));
     }
 
     out.push_str(")->(");
@@ -252,20 +313,62 @@ fn canonical_func(f: &FuncSignature) -> String {
         if i > 0 {
             out.push(',');
         }
-        out.push_str(&r.canonical());
+        out.push_str(&arena.canonical(*r));
     }
 
     out.push(')');
     out
 }
 
-/// The complete parsed composition structure
-#[derive(Debug, Default)]
+/// A fully resolved composition graph describing how a set of WebAssembly
+/// components are wired together.
+///
+/// Each node in the graph represents a component instance, and edges represent
+/// interface imports satisfied by other instances (or by the host).
+///
+/// The graph is primarily used for:
+/// - visualizing component compositions
+/// - validating interface compatibility
+/// - generating deterministic fingerprints of interfaces
+/// - exporting a stable JSON representation of the composition
+///
+/// Instance identifiers correspond to the instance indices produced during
+/// component instantiation.
+#[derive(Default)]
 pub struct CompositionGraph {
-    /// All component instances, keyed by instance index
+    /// All component instances in the composition.
+    ///
+    /// The key is the instance index assigned during composition.
+    /// Each [`ComponentNode`] describes the component instance along with
+    /// the interfaces it imports from other instances or the host.
     pub nodes: BTreeMap<u32, ComponentNode>,
-    /// What the composed component exports (interface name -> source instance)
+
+    /// Interfaces exported by the final composed component.
+    ///
+    /// The key is the fully-qualified interface name (for example
+    /// `"wasi:http/handler@0.3.0"`), and the value is the instance index
+    /// providing that interface.
+    ///
+    /// This effectively defines the public surface of the composed component.
     pub component_exports: BTreeMap<String, u32>,
+
+    /// Global arena containing all unique value types referenced in the graph.
+    ///
+    /// Complex interface types (function signatures, records, variants, etc.)
+    /// are interned in this arena and referenced by [`TypeId`] instead of
+    /// embedding recursive type structures directly.
+    ///
+    /// This provides several advantages:
+    ///
+    /// - **Structural deduplication** — identical types are stored only once.
+    /// - **Cheap equality** — type equality becomes a simple `TypeId` comparison.
+    /// - **Reduced memory usage** — large graphs avoid repeated allocations.
+    /// - **Deterministic fingerprints** — canonical type identities can be
+    ///   computed efficiently for interface compatibility checks.
+    ///
+    /// The arena is shared across the entire graph so that all interface
+    /// signatures refer to a single canonical set of type definitions.
+    pub arena: TypeArena,
 }
 
 impl CompositionGraph {
@@ -333,6 +436,109 @@ impl CompositionGraph {
     }
 }
 
+use std::collections::HashMap;
+
+#[derive(Debug, Default)]
+pub struct TypeArena {
+    types: Vec<ValueType>,
+    intern: HashMap<ValueType, TypeId>,
+}
+
+impl TypeArena {
+    pub fn new() -> Self {
+        Self {
+            types: Vec::new(),
+            intern: HashMap::new(),
+        }
+    }
+
+    pub fn intern(&mut self, ty: ValueType) -> TypeId {
+        if let Some(id) = self.intern.get(&ty) {
+            return *id;
+        }
+
+        let id = TypeId(self.types.len() as u32);
+        self.types.push(ty.clone());
+        self.intern.insert(ty, id);
+
+        id
+    }
+
+    pub fn get(&self, id: TypeId) -> &ValueType {
+        &self.types[id.0 as usize]
+    }
+}
+impl TypeArena {
+    pub fn canonical(&self, id: TypeId) -> String {
+        match self.get(id) {
+            ValueType::Map(k, v) => format!("map<{},{}>", self.canonical(*k), self.canonical(*v)),
+
+            ValueType::FixedSizeList(t, n) => format!("array{}<{}>", n, self.canonical(*t)),
+
+            ValueType::List(t) => format!("list<{}>", self.canonical(*t)),
+
+            ValueType::Option(t) => format!("option<{}>", self.canonical(*t)),
+
+            ValueType::Tuple(ts) => format!(
+                "tuple({})",
+                ts.iter()
+                    .map(|t| self.canonical(*t))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+
+            ValueType::Record(fields) => format!(
+                "record{{{}}}",
+                fields
+                    .iter()
+                    .map(|(n, t)| format!("{}:{}", n, self.canonical(*t)))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+
+            ValueType::Variant(cases) => format!(
+                "variant{{{}}}",
+                cases
+                    .iter()
+                    .map(|(n, t)| match t {
+                        Some(t) => format!("{}:{}", n, self.canonical(*t)),
+                        None => n.clone(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+
+            ValueType::Enum(names) => format!("enum{{{}}}", names.join(",")),
+
+            ValueType::Flags(names) => format!("flags{{{}}}", names.join(",")),
+
+            ValueType::Result { ok, err } => format!(
+                "result<{},{}>",
+                ok.map(|t| self.canonical(t)).unwrap_or("_".into()),
+                err.map(|t| self.canonical(t)).unwrap_or("_".into())
+            ),
+
+            ValueType::Resource => "resource".into(),
+            ValueType::AsyncHandle => "async_handle".into(),
+
+            ValueType::Bool => "bool".into(),
+            ValueType::S8 => "s8".into(),
+            ValueType::U8 => "u8".into(),
+            ValueType::S16 => "s16".into(),
+            ValueType::U16 => "u16".into(),
+            ValueType::S32 => "s32".into(),
+            ValueType::U32 => "u32".into(),
+            ValueType::S64 => "s64".into(),
+            ValueType::U64 => "u64".into(),
+            ValueType::F32 => "f32".into(),
+            ValueType::F64 => "f64".into(),
+            ValueType::Char => "char".into(),
+            ValueType::String => "string".into(),
+            ValueType::ErrorContext => "error-context".into(),
+        }
+    }
+}
+
 /// Extract a short interface name from a full interface path
 /// e.g., "wasi:http/handler@0.3.0-rc-2026-01-06" -> "handler"
 pub fn short_interface_name(full_name: &str) -> String {
@@ -355,11 +561,17 @@ mod tests {
         let conn = InterfaceConnection::from_instance(
             "wasi:http/handler@0.3.0-rc-2026-01-06".to_string(),
             0,
-            None
+            None,
+            &TypeArena::new(),
         );
         assert_eq!(conn.short_label(), "handler");
 
-        let conn2 = InterfaceConnection::from_instance("wasi:io/streams@0.2.0".to_string(), 1, None);
+        let conn2 = InterfaceConnection::from_instance(
+            "wasi:io/streams@0.2.0".to_string(),
+            1,
+            None,
+            &TypeArena::new(),
+        );
         assert_eq!(conn2.short_label(), "streams");
     }
 

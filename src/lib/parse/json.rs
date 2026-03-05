@@ -1,6 +1,12 @@
-use crate::model::{ComponentNode, CompositionGraph, InterfaceConnection, InterfaceType};
-use crate::output::json::JsonCompositionGraph;
+use crate::model::{
+    ComponentNode, CompositionGraph, FuncSignature, InstanceInterface, InterfaceConnection,
+    InterfaceType, TypeArena, TypeId, ValueType,
+};
+use crate::output::json::{
+    FuncSignatureJson, InterfaceTypeJson, JsonCompositionGraph, ValueTypeJson,
+};
 use serde::de::Error;
+use std::collections::BTreeMap;
 use std::fs::File;
 
 pub fn parse_json(json_reader: &File) -> anyhow::Result<CompositionGraph> {
@@ -34,6 +40,7 @@ impl CompositionGraph {
     fn from_json_model(model: JsonCompositionGraph) -> Result<Self, serde_json::Error> {
         use std::collections::BTreeMap;
 
+        let mut arena = TypeArena::new();
         let mut nodes = BTreeMap::new();
 
         for json_node in model.nodes {
@@ -45,10 +52,14 @@ impl CompositionGraph {
 
             for conn in json_node.imports {
                 let interface_type = match conn.interface_type {
-                    Some(json_ty) => Some(InterfaceType::try_from(json_ty).map_err(|e| serde_json::Error::custom(format!(
-                        "Failed to parse interface_type for {}: {}",
-                        conn.interface, e
-                    )))?),
+                    Some(json_ty) => {
+                        Some(convert_interface_type(json_ty, &mut arena).map_err(|e| {
+                            serde_json::Error::custom(format!(
+                                "Failed to parse interface_type for {}: {}",
+                                conn.interface, e
+                            ))
+                        })?)
+                    }
                     None => None,
                 };
 
@@ -63,7 +74,6 @@ impl CompositionGraph {
                 node.add_import(connection);
             }
 
-
             nodes.insert(json_node.id, node);
         }
 
@@ -75,6 +85,85 @@ impl CompositionGraph {
         Ok(CompositionGraph {
             nodes,
             component_exports,
+            arena,
         })
     }
+}
+
+fn convert_interface_type(
+    json: InterfaceTypeJson,
+    arena: &mut TypeArena,
+) -> Result<InterfaceType, String> {
+    match json {
+        InterfaceTypeJson::Func { params, results } => Ok(InterfaceType::Func(
+            convert_func_signature(FuncSignatureJson { params, results }, arena)?,
+        )),
+
+        InterfaceTypeJson::Instance { functions } => {
+            let mut funcs = BTreeMap::new();
+
+            for (name, f) in functions {
+                funcs.insert(name, convert_func_signature(f, arena)?);
+            }
+
+            Ok(InterfaceType::Instance(InstanceInterface {
+                functions: funcs,
+            }))
+        }
+    }
+}
+fn convert_func_signature(
+    json: FuncSignatureJson,
+    arena: &mut TypeArena,
+) -> Result<FuncSignature, String> {
+    let params = json
+        .params
+        .into_iter()
+        .map(|v| intern_value_type(v, arena))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let results = json
+        .results
+        .into_iter()
+        .map(|v| intern_value_type(v, arena))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(FuncSignature { params, results })
+}
+fn intern_value_type(json: ValueTypeJson, arena: &mut TypeArena) -> Result<TypeId, String> {
+    let ty = match json {
+        ValueTypeJson::Bool => ValueType::Bool,
+
+        ValueTypeJson::List(inner) => {
+            let inner_id = intern_value_type(*inner, arena)?;
+            ValueType::List(inner_id)
+        }
+
+        ValueTypeJson::Tuple(items) => {
+            let ids = items
+                .into_iter()
+                .map(|v| intern_value_type(*v, arena))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            ValueType::Tuple(ids)
+        }
+
+        ValueTypeJson::Record(fields) => {
+            let fields = fields
+                .into_iter()
+                .map(|(n, v)| Ok((n, intern_value_type(*v, arena)?)))
+                .collect::<Result<Vec<_>, String>>()?;
+
+            ValueType::Record(fields)
+        }
+
+        // etc
+        // convert everything recursively
+        ValueTypeJson::Resource => ValueType::Resource,
+        ValueTypeJson::AsyncHandle => ValueType::AsyncHandle,
+
+        _ => todo!(),
+    };
+
+    Ok(arena.intern(ty))
 }
