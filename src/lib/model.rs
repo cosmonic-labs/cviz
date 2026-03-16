@@ -2,12 +2,18 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct TypeId(u32);
+pub struct ValueTypeId(u32);
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct InterfaceTypeId(u32);
 
 /// Sentinel value for synthetic component instances (e.g., export wrappers)
 pub const SYNTHETIC_COMPONENT: u32 = u32::MAX;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum InternedId {
+    Value(ValueTypeId),
+    Interface(InterfaceTypeId),
+}
 
 /// Represents a single component instance within a [`CompositionGraph`].
 ///
@@ -228,7 +234,7 @@ pub struct InstanceInterface {
 
 /// Represents the signature of a function in an interface.
 ///
-/// Parameter and result types are stored as [`TypeId`] values referencing
+/// Parameter and result types are stored as [`ValueTypeId`] values referencing
 /// entries in the graph's global [`TypeArena`]. This avoids storing
 /// recursive type structures inline and enables efficient deduplication
 /// and comparison of types.
@@ -236,15 +242,15 @@ pub struct InstanceInterface {
 pub struct FuncSignature {
     /// Parameter types of the function.
     ///
-    /// Each entry is a [`TypeId`] referring to a value type stored in the
+    /// Each entry is a [`ValueTypeId`] referring to a value type stored in the
     /// graph's type arena.
-    pub params: Vec<TypeId>,
+    pub params: Vec<ValueTypeId>,
 
     /// Result types of the function.
     ///
     /// Multiple results are supported to match the WebAssembly component
     /// model.
-    pub results: Vec<TypeId>,
+    pub results: Vec<ValueTypeId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -267,19 +273,19 @@ pub enum ValueType {
     Resource,
     AsyncHandle,
 
-    List(TypeId),
-    FixedSizeList(TypeId, u32),
-    Tuple(Vec<TypeId>),
-    Record(Vec<(String, TypeId)>),
-    Variant(Vec<(String, Option<TypeId>)>),
+    List(ValueTypeId),
+    FixedSizeList(ValueTypeId, u32),
+    Tuple(Vec<ValueTypeId>),
+    Record(Vec<(String, ValueTypeId)>),
+    Variant(Vec<(String, Option<ValueTypeId>)>),
     Enum(Vec<String>),
-    Option(TypeId),
+    Option(ValueTypeId),
     Result {
-        ok: Option<TypeId>,
-        err: Option<TypeId>,
+        ok: Option<ValueTypeId>,
+        err: Option<ValueTypeId>,
     },
     Flags(Vec<String>),
-    Map(TypeId, TypeId),
+    Map(ValueTypeId, ValueTypeId),
 }
 
 fn canonical_interface(iface: &InterfaceType, arena: &TypeArena) -> String {
@@ -312,7 +318,7 @@ fn canonical_func(f: &FuncSignature, arena: &TypeArena) -> String {
         if i > 0 {
             out.push(',');
         }
-        out.push_str(&arena.canonical(*p));
+        out.push_str(&arena.canonical_val(*p));
     }
 
     out.push_str(")->(");
@@ -321,7 +327,7 @@ fn canonical_func(f: &FuncSignature, arena: &TypeArena) -> String {
         if i > 0 {
             out.push(',');
         }
-        out.push_str(&arena.canonical(*r));
+        out.push_str(&arena.canonical_val(*r));
     }
 
     out.push(')');
@@ -363,7 +369,7 @@ pub struct CompositionGraph {
     /// Global arena containing all unique value types referenced in the graph.
     ///
     /// Complex interface types (function signatures, records, variants, etc.)
-    /// are interned in this arena and referenced by [`TypeId`] instead of
+    /// are interned in this arena and referenced by [`ValueTypeId`] instead of
     /// embedding recursive type structures directly.
     ///
     /// This provides several advantages:
@@ -396,10 +402,16 @@ impl CompositionGraph {
         &mut self,
         interface_name: String,
         source_instance: u32,
-        interface_type: InterfaceType,
+        interface_type: Option<InterfaceType>,
     ) {
-        let ty = interface_type.intern(&mut self.arena);
-        let fingerprint = interface_type.fingerprint(&self.arena);
+        let (ty, fingerprint) = match interface_type {
+            Some(t) => {
+                let id = t.intern(&mut self.arena);
+                let fp = t.fingerprint(&self.arena);
+                (Some(InternedId::Interface(id)), Some(fp))
+            }
+            None => (None, None),
+        };
 
         self.component_exports.insert(
             interface_name,
@@ -469,37 +481,37 @@ pub struct ExportInfo {
     /// Index of the instance providing this export
     pub source_instance: u32,
     /// Fingerprint of the exported interface type
-    pub fingerprint: String,
+    pub fingerprint: Option<String>,
     /// Reference to the type in the global arena
-    pub ty: InterfaceTypeId,
+    pub ty: Option<InternedId>,
 }
 
 use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 pub struct TypeArena {
-    types: Vec<ValueType>,
-    intern: HashMap<ValueType, TypeId>,
+    vals: Vec<ValueType>,
+    val_intern: HashMap<ValueType, ValueTypeId>,
 
     interfaces: Vec<InterfaceType>,
     interface_intern: HashMap<String, InterfaceTypeId>,
 }
 
 impl TypeArena {
-    pub fn intern_ty(&mut self, ty: ValueType) -> TypeId {
-        if let Some(id) = self.intern.get(&ty) {
+    pub fn intern_val(&mut self, ty: ValueType) -> ValueTypeId {
+        if let Some(id) = self.val_intern.get(&ty) {
             return *id;
         }
 
-        let id = TypeId(self.types.len() as u32);
-        self.types.push(ty.clone());
-        self.intern.insert(ty, id);
+        let id = ValueTypeId(self.vals.len() as u32);
+        self.vals.push(ty.clone());
+        self.val_intern.insert(ty, id);
 
         id
     }
 
-    pub fn lookup_ty(&self, id: TypeId) -> &ValueType {
-        &self.types[id.0 as usize]
+    pub fn lookup_val(&self, id: ValueTypeId) -> &ValueType {
+        &self.vals[id.0 as usize]
     }
 
     pub fn intern_interface(&mut self, interface: &InterfaceType) -> InterfaceTypeId {
@@ -523,20 +535,20 @@ impl TypeArena {
     }
 }
 impl TypeArena {
-    pub fn canonical(&self, id: TypeId) -> String {
-        match self.lookup_ty(id) {
-            ValueType::Map(k, v) => format!("map<{},{}>", self.canonical(*k), self.canonical(*v)),
+    pub fn canonical_val(&self, id: ValueTypeId) -> String {
+        match self.lookup_val(id) {
+            ValueType::Map(k, v) => format!("map<{},{}>", self.canonical_val(*k), self.canonical_val(*v)),
 
-            ValueType::FixedSizeList(t, n) => format!("array{}<{}>", n, self.canonical(*t)),
+            ValueType::FixedSizeList(t, n) => format!("array{}<{}>", n, self.canonical_val(*t)),
 
-            ValueType::List(t) => format!("list<{}>", self.canonical(*t)),
+            ValueType::List(t) => format!("list<{}>", self.canonical_val(*t)),
 
-            ValueType::Option(t) => format!("option<{}>", self.canonical(*t)),
+            ValueType::Option(t) => format!("option<{}>", self.canonical_val(*t)),
 
             ValueType::Tuple(ts) => format!(
                 "tuple({})",
                 ts.iter()
-                    .map(|t| self.canonical(*t))
+                    .map(|t| self.canonical_val(*t))
                     .collect::<Vec<_>>()
                     .join(",")
             ),
@@ -545,7 +557,7 @@ impl TypeArena {
                 "record{{{}}}",
                 fields
                     .iter()
-                    .map(|(n, t)| format!("{}:{}", n, self.canonical(*t)))
+                    .map(|(n, t)| format!("{}:{}", n, self.canonical_val(*t)))
                     .collect::<Vec<_>>()
                     .join(",")
             ),
@@ -555,7 +567,7 @@ impl TypeArena {
                 cases
                     .iter()
                     .map(|(n, t)| match t {
-                        Some(t) => format!("{}:{}", n, self.canonical(*t)),
+                        Some(t) => format!("{}:{}", n, self.canonical_val(*t)),
                         None => n.clone(),
                     })
                     .collect::<Vec<_>>()
@@ -568,8 +580,8 @@ impl TypeArena {
 
             ValueType::Result { ok, err } => format!(
                 "result<{},{}>",
-                ok.map(|t| self.canonical(t)).unwrap_or("_".into()),
-                err.map(|t| self.canonical(t)).unwrap_or("_".into())
+                ok.map(|t| self.canonical_val(t)).unwrap_or("_".into()),
+                err.map(|t| self.canonical_val(t)).unwrap_or("_".into())
             ),
 
             ValueType::Resource => "resource".into(),
@@ -590,6 +602,9 @@ impl TypeArena {
             ValueType::String => "string".into(),
             ValueType::ErrorContext => "error-context".into(),
         }
+    }
+    pub fn canonical_interface(&self, id: InterfaceTypeId) -> String {
+        canonical_interface(self.lookup_interface(id), self)
     }
 }
 

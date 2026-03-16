@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use crate::model::{
-    CompositionGraph, InterfaceConnection, InterfaceType, TypeArena, TypeId, ValueType,
+    CompositionGraph, InterfaceConnection, InterfaceType, TypeArena, ValueTypeId, ValueType,
 };
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +8,7 @@ use serde::{Deserialize, Serialize};
 fn generate_json_model(graph: &CompositionGraph) -> JsonCompositionGraph {
     let arena = &graph.arena;
 
+    let mut flat = Flattener::default();
     let nodes = graph
         .nodes
         .iter()
@@ -41,6 +43,9 @@ fn generate_json_model(graph: &CompositionGraph) -> JsonCompositionGraph {
         version: 1,
         nodes,
         exports,
+
+        types: flat.types,
+        interfaces: flat.interfaces,
     }
 }
 
@@ -62,6 +67,36 @@ pub struct JsonCompositionGraph {
     pub version: u32,
     pub nodes: Vec<JsonNode>,
     pub exports: Vec<JsonExport>,
+
+    // flattened type tables
+    pub types: Vec<FlattenedTypeJson>,
+    pub interfaces: Vec<FlattenedInterfaceJson>
+}
+
+pub type FlatId = u32;
+#[derive(Default)]
+struct Flattener {
+    id_counter: FlatId,
+    type_map: HashMap<*const ValueType, FlatId>,
+    iface_map: HashMap<*const InterfaceType, FlatId>,
+
+    // flattened type tables
+    pub types: Vec<FlattenedTypeJson>,
+    pub interfaces: Vec<FlattenedInterfaceJson>
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct FlattenedTypeJson {
+    pub id: FlatId,
+    #[serde(flatten)]
+    pub ty: ValueTypeJson,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct FlattenedInterfaceJson {
+    pub id: FlatId,
+    #[serde(flatten)]
+    pub iface: InterfaceTypeJson,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -89,7 +124,7 @@ pub struct JsonInterfaceConnection {
 
     /// Optional structured type of the interface
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub interface_type: Option<InterfaceTypeJson>,
+    pub interface_type: Option<FlatId>,
 
     /// Optional fingerprint (deterministic hash of the interface)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -116,8 +151,8 @@ impl JsonInterfaceConnection {
 pub enum InterfaceTypeJson {
     /// Function signature
     Func {
-        params: Vec<ValueTypeJson>,
-        results: Vec<ValueTypeJson>,
+        params: Vec<FlatId>,
+        results: Vec<FlatId>,
     },
 
     /// Instance with named exported functions
@@ -166,8 +201,8 @@ impl InterfaceTypeJson {
 
 #[derive(Deserialize, Serialize)]
 pub struct FuncSignatureJson {
-    pub params: Vec<ValueTypeJson>,
-    pub results: Vec<ValueTypeJson>,
+    pub params: Vec<FlatId>,
+    pub results: Vec<FlatId>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,31 +223,31 @@ pub enum ValueTypeJson {
     String,
     ErrorContext,
 
-    List(Box<ValueTypeJson>),
+    List(FlatId),
     FixedSizeList {
-        elem: Box<ValueTypeJson>,
+        elem: FlatId,
         size: u32,
     },
-    Tuple(Vec<Box<ValueTypeJson>>),
-    Record(Vec<(String, Box<ValueTypeJson>)>),
-    Variant(Vec<(String, Option<Box<ValueTypeJson>>)>),
+    Tuple(Vec<FlatId>),
+    Record(Vec<(String, FlatId)>),
+    Variant(Vec<(String, Option<FlatId>)>),
     Enum(Vec<String>),
     Flags(Vec<String>),
-    Option(Box<ValueTypeJson>),
+    Option(FlatId),
     Result {
-        ok: Option<Box<ValueTypeJson>>,
-        err: Option<Box<ValueTypeJson>>,
+        ok: Option<FlatId>,
+        err: Option<FlatId>,
     },
     Map {
-        key: Box<ValueTypeJson>,
-        value: Box<ValueTypeJson>,
+        key: FlatId,
+        value: FlatId,
     },
     Resource,
     AsyncHandle,
 }
 
-pub fn typeid_to_json(id: TypeId, arena: &TypeArena) -> ValueTypeJson {
-    match &arena.lookup_ty(id) {
+pub fn typeid_to_json(id: ValueTypeId, arena: &TypeArena) -> ValueTypeJson {
+    match &arena.lookup_val(id) {
         ValueType::Bool => ValueTypeJson::Bool,
         ValueType::S8 => ValueTypeJson::S8,
         ValueType::U8 => ValueTypeJson::U8,

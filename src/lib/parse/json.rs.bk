@@ -1,6 +1,6 @@
 use crate::model::{
     ComponentNode, CompositionGraph, ExportInfo, FuncSignature, InstanceInterface,
-    InterfaceConnection, InterfaceType, InterfaceTypeId, TypeArena, TypeId, ValueType,
+    InterfaceConnection, InterfaceType, InterfaceTypeId, TypeArena, ValueTypeId, ValueType,
 };
 use crate::output::json::{
     FuncSignatureJson, InterfaceTypeJson, JsonCompositionGraph, JsonExport, ValueTypeJson,
@@ -152,7 +152,7 @@ fn convert_func_signature(
 
     Ok(FuncSignature { params, results })
 }
-fn intern_value_type(json: ValueTypeJson, arena: &mut TypeArena) -> Result<TypeId, String> {
+fn intern_value_type(json: ValueTypeJson, arena: &mut TypeArena) -> Result<ValueTypeId, String> {
     let ty = match json {
         ValueTypeJson::Bool => ValueType::Bool,
 
@@ -187,5 +187,5 @@ fn intern_value_type(json: ValueTypeJson, arena: &mut TypeArena) -> Result<TypeI
         _ => todo!(),
     };
 
-    Ok(arena.intern_ty(ty))
+    Ok(arena.intern_val(ty))
 }

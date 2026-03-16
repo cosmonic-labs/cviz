@@ -1,18 +1,14 @@
-use crate::model::{
-    ComponentNode, CompositionGraph, FuncSignature, InstanceInterface, InterfaceConnection,
-    InterfaceType, TypeArena, TypeId, ValueType,
-};
+use crate::model::{ComponentNode, CompositionGraph, FuncSignature, InstanceInterface, InterfaceConnection, InterfaceType, TypeArena, ValueType, ValueTypeId};
 use anyhow::Result;
-use std::collections::{BTreeMap, HashMap};
-use wirm::ir::component::refs::{GetCompRefs, GetItemRef, GetTypeRefs};
+use std::collections::HashMap;
+use wirm::ir::component::refs::{GetCompRefs, GetItemRef};
 use wirm::ir::component::visitor::{
     walk_structural, ComponentVisitor, ItemKind, ResolvedItem, VisitCtx,
 };
 use wirm::wasmparser::{
-    ComponentAlias, ComponentDefinedType, ComponentExport, ComponentInstance, ComponentType,
-    ComponentTypeRef, ComponentValType, InstanceTypeDeclaration, PrimitiveValType,
+    ComponentAlias, ComponentExport, ComponentInstance, ComponentTypeRef, PrimitiveValType,
 };
-use wirm::Component;
+use wirm::{ConcreteFuncType, ConcreteType, ConcreteValType, Component};
 
 /// Parse a WebAssembly component file and extract its composition graph
 pub fn parse_component(buff: &[u8]) -> Result<CompositionGraph> {
@@ -94,7 +90,7 @@ impl ComponentVisitor<'_> for Visitor {
                 for arg in args.iter() {
                     let interface_name = arg.name.to_string();
                     let interface_type =
-                        pull_type_info(&interface_name, &instantiated_comp, &mut self.graph, cx);
+                        pull_type_info(&interface_name, &instantiated_comp, &mut self.graph);
 
                     // The arg.index is the instance providing this interface
                     // It might be an alias, so resolve it to the actual source instance
@@ -149,8 +145,10 @@ impl ComponentVisitor<'_> for Visitor {
 
         // Only track instance exports
         match item {
-            ResolvedItem::CompInst(inst_id, _) => {
-                self.graph.add_export(export_name, inst_id, todo!());
+            ResolvedItem::CompInst(inst_id, inst) => {
+                let iface_type =
+                    pull_export_type_from_instance(&export_name, inst, &mut self.graph, cx);
+                self.graph.add_export(export_name, inst_id, iface_type);
             }
             ResolvedItem::Alias(_, alias) => {
                 resolve_imp_alias(cx, alias, &export_name, &mut self.graph);
@@ -160,114 +158,112 @@ impl ComponentVisitor<'_> for Visitor {
     }
 }
 
+fn pull_export_type_from_instance(
+    export_name: &str,
+    inst: &ComponentInstance,
+    graph: &mut CompositionGraph,
+    cx: &VisitCtx,
+) -> Option<InterfaceType> {
+    let comp_ref = inst.get_comp_refs().into_iter().next()?;
+    let comp = match cx.resolve(&comp_ref.ref_) {
+        ResolvedItem::Component(_, c) => c,
+        _ => return None,
+    };
+    concrete_to_interface_type(comp.concretize_export(export_name)?, &mut graph.arena)
+}
+
 fn pull_type_info(
     interface_name: &str,
     instantiated_comp: &Option<&Component>,
     graph: &mut CompositionGraph,
-    cx: &VisitCtx,
 ) -> Option<InterfaceType> {
     let comp = (*instantiated_comp)?;
-
-    for imp in &comp.imports {
-        if imp.name.0 == interface_name {
-            let refs = imp.get_type_refs();
-            let type_ref = refs.first()?;
-
-            if let ResolvedItem::CompType(_, ty) = cx.resolve(&type_ref.ref_) {
-                return convert_component_type(ty, graph, cx);
-            }
-        }
-    }
-
-    None
+    concrete_to_interface_type(comp.concretize_import(interface_name)?, &mut graph.arena)
 }
-fn convert_component_type(
-    ty: &ComponentType,
-    graph: &mut CompositionGraph,
-    cx: &VisitCtx,
-) -> Option<InterfaceType> {
+
+fn concrete_to_interface_type(ty: ConcreteType, arena: &mut TypeArena) -> Option<InterfaceType> {
     match ty {
-        ComponentType::Instance(decls) => Some(InterfaceType::Instance(convert_instance_type(
-            decls, graph, cx,
-        ))),
-
-        ComponentType::Func(_) => Some(InterfaceType::Func(
-            convert_func_type(ty, graph, cx).unwrap(),
-        )),
-
-        _ => None,
-    }
-}
-fn convert_instance_type(
-    decls: &[InstanceTypeDeclaration],
-    graph: &mut CompositionGraph,
-    cx: &VisitCtx,
-) -> InstanceInterface {
-    let mut functions = BTreeMap::new();
-
-    for decl in decls {
-        if let InstanceTypeDeclaration::Export { name, .. } = decl {
-            if let Some(type_ref) = decl.get_type_refs().first() {
-                if let ResolvedItem::CompType(_, ty) = cx.resolve(&type_ref.ref_) {
-                    if let Some(sig) = convert_func_type(ty, graph, cx) {
-                        functions.insert(name.0.to_string(), sig);
-                    }
-                }
-            }
+        ConcreteType::Instance(funcs) => {
+            let functions = funcs
+                .into_iter()
+                .map(|(name, ft)| (name.to_string(), concrete_to_func_sig(ft, arena)))
+                .collect();
+            Some(InterfaceType::Instance(InstanceInterface { functions }))
         }
-    }
-
-    InstanceInterface { functions }
-}
-fn convert_func_type(
-    ty: &ComponentType,
-    graph: &mut CompositionGraph,
-    cx: &VisitCtx,
-) -> Option<FuncSignature> {
-    if let ComponentType::Func(func_ty) = ty {
-        let params = func_ty
-            .params
-            .iter()
-            .map(|(_, t)| convert_val_type(t, graph, cx))
-            .collect();
-
-        let results = func_ty
-            .result
-            .map(|t| convert_val_type(&t, graph, cx))
-            .into_iter()
-            .collect();
-
-        Some(FuncSignature { params, results })
-    } else {
-        None
+        ConcreteType::Func(ft) => Some(InterfaceType::Func(concrete_to_func_sig(ft, arena))),
+        ConcreteType::Resource => None,
     }
 }
-fn convert_val_type(ty: &ComponentValType, graph: &mut CompositionGraph, cx: &VisitCtx) -> TypeId {
-    let vt = convert_val_type_inner(ty, graph, cx);
-    graph.arena.intern_ty(vt)
+
+fn intern(ty: ConcreteValType, arena: &mut TypeArena) -> ValueTypeId {
+    let vt = concrete_to_val_type(ty, arena);
+    arena.intern_val(vt)
 }
 
-fn convert_val_type_inner(
-    ty: &ComponentValType,
-    graph: &mut CompositionGraph,
-    cx: &VisitCtx,
-) -> ValueType {
+fn concrete_to_func_sig(ft: ConcreteFuncType, arena: &mut TypeArena) -> FuncSignature {
+    let params = ft
+        .params
+        .into_iter()
+        .map(|(_, ty)| intern(ty, arena))
+        .collect();
+    let results = ft
+        .result
+        .map(|ty| intern(ty, arena))
+        .into_iter()
+        .collect();
+    FuncSignature { params, results }
+}
+
+fn concrete_to_val_type(ty: ConcreteValType, arena: &mut TypeArena) -> ValueType {
     match ty {
-        ComponentValType::Primitive(prim) => convert_prim_type_to_val(prim),
-
-        ComponentValType::Type(_) => {
-            if let Some(type_ref) = ty.get_type_refs().first() {
-                if let ResolvedItem::CompType(_, comp_ty) = cx.resolve(&type_ref.ref_) {
-                    return convert_component_type_to_val(comp_ty, graph, cx);
-                }
-            }
-
-            panic!("unresolved ComponentValType::Type")
+        ConcreteValType::Primitive(p) => prim_to_val_type(p),
+        ConcreteValType::Record(fields) => ValueType::Record(
+            fields
+                .into_iter()
+                .map(|(name, ty)| (name.to_string(), intern(*ty, arena)))
+                .collect(),
+        ),
+        ConcreteValType::Variant(cases) => ValueType::Variant(
+            cases
+                .into_iter()
+                .map(|(name, ty)| {
+                    (
+                        name.to_string(),
+                        ty.map(|t| intern(*t, arena)),
+                    )
+                })
+                .collect(),
+        ),
+        ConcreteValType::List(ty) => ValueType::List(intern(*ty, arena)),
+        ConcreteValType::FixedSizeList(ty, size) => {
+            ValueType::FixedSizeList(intern(*ty, arena), size)
         }
+        ConcreteValType::Tuple(types) => ValueType::Tuple(
+            types
+                .into_iter()
+                .map(|ty| intern(ty, arena))
+                .collect(),
+        ),
+        ConcreteValType::Option(ty) => {
+            ValueType::Option(intern(*ty, arena))
+        }
+        ConcreteValType::Result { ok, err } => ValueType::Result {
+            ok: ok.map(|t| intern(*t, arena)),
+            err: err.map(|t| intern(*t, arena)),
+        },
+        ConcreteValType::Flags(names) => ValueType::Flags(names.iter().map(|s| s.to_string()).collect()),
+        ConcreteValType::Enum(names) => ValueType::Enum(names.iter().map(|s| s.to_string()).collect()),
+        ConcreteValType::Map(key, val) => ValueType::Map(
+            intern(*key, arena),
+            intern(*val, arena),
+        ),
+        ConcreteValType::Resource => ValueType::Resource,
+        ConcreteValType::AsyncHandle => ValueType::AsyncHandle,
     }
 }
-fn convert_prim_type_to_val(ty: &PrimitiveValType) -> ValueType {
-    match ty {
+
+fn prim_to_val_type(p: PrimitiveValType) -> ValueType {
+    match p {
         PrimitiveValType::Bool => ValueType::Bool,
         PrimitiveValType::S8 => ValueType::S8,
         PrimitiveValType::U8 => ValueType::U8,
@@ -282,99 +278,6 @@ fn convert_prim_type_to_val(ty: &PrimitiveValType) -> ValueType {
         PrimitiveValType::Char => ValueType::Char,
         PrimitiveValType::String => ValueType::String,
         PrimitiveValType::ErrorContext => ValueType::ErrorContext,
-    }
-}
-fn convert_component_type_to_val(
-    ty: &ComponentType,
-    graph: &mut CompositionGraph,
-    cx: &VisitCtx,
-) -> ValueType {
-    match ty {
-        ComponentType::Defined(def) => convert_defined_type(def, graph, cx),
-
-        ComponentType::Resource { .. } => ValueType::Resource,
-
-        // These shouldn't normally appear in a value position
-        ComponentType::Func(_) | ComponentType::Component(_) | ComponentType::Instance(_) => {
-            panic!("unexpected component type in value position: {:?}", ty)
-        }
-    }
-}
-fn convert_defined_type(
-    ty: &ComponentDefinedType,
-    graph: &mut CompositionGraph,
-    cx: &VisitCtx,
-) -> ValueType {
-    match ty {
-        ComponentDefinedType::Record(fields) => ValueType::Record(
-            fields
-                .iter()
-                .map(|(name, ty)| (name.to_string(), convert_val_type(ty, graph, cx)))
-                .collect(),
-        ),
-
-        ComponentDefinedType::Variant(cases) => ValueType::Variant(
-            cases
-                .iter()
-                .map(|c| {
-                    (
-                        c.name.to_string(),
-                        c.ty.as_ref().map(|t| convert_val_type(t, graph, cx)),
-                    )
-                })
-                .collect(),
-        ),
-
-        ComponentDefinedType::List(ty) => ValueType::List(convert_val_type(ty, graph, cx)),
-
-        ComponentDefinedType::Tuple(types) => ValueType::Tuple(
-            types
-                .iter()
-                .map(|t| convert_val_type(t, graph, cx))
-                .collect(),
-        ),
-
-        ComponentDefinedType::Option(ty) => ValueType::Variant(vec![
-            ("none".into(), None),
-            ("some".into(), Some(convert_val_type(ty, graph, cx))),
-        ]),
-
-        ComponentDefinedType::Result { ok, err } => ValueType::Variant(vec![
-            (
-                "ok".into(),
-                ok.as_ref().map(|t| convert_val_type(t, graph, cx)),
-            ),
-            (
-                "err".into(),
-                err.as_ref().map(|t| convert_val_type(t, graph, cx)),
-            ),
-        ]),
-
-        ComponentDefinedType::Flags(flags) => {
-            ValueType::Flags(flags.iter().map(|name| name.to_string()).collect())
-        }
-
-        ComponentDefinedType::Enum(cases) => {
-            ValueType::Enum(cases.iter().map(|name| name.to_string()).collect())
-        }
-
-        ComponentDefinedType::Own(_) | ComponentDefinedType::Borrow(_) => ValueType::Resource,
-
-        ComponentDefinedType::Future(_) | ComponentDefinedType::Stream(_) => {
-            // These appear in async APIs but aren't common yet
-            ValueType::AsyncHandle
-        }
-
-        ComponentDefinedType::Primitive(prim) => convert_prim_type_to_val(prim),
-
-        ComponentDefinedType::Map(key, value) => ValueType::Map(
-            convert_val_type(key, graph, cx),
-            convert_val_type(value, graph, cx),
-        ),
-
-        ComponentDefinedType::FixedSizeList(elem, size) => {
-            ValueType::FixedSizeList(convert_val_type(elem, graph, cx), *size)
-        }
     }
 }
 
@@ -418,8 +321,9 @@ fn resolve_imp_alias(
     let inst_ref = alias.get_item_ref();
 
     match cx.resolve(&inst_ref.ref_) {
-        ResolvedItem::CompInst(inst_id, _) => {
-            graph.add_export(export_name.to_string(), inst_id, todo!())
+        ResolvedItem::CompInst(inst_id, inst) => {
+            let iface_type = pull_export_type_from_instance(export_name, inst, graph, cx);
+            graph.add_export(export_name.to_string(), inst_id, iface_type);
         }
         ResolvedItem::Alias(_, nested_alias) => {
             resolve_imp_alias(cx, nested_alias, export_name, graph)
@@ -545,6 +449,13 @@ mod tests {
             first_handler.source_instance, chain[1],
             "first node's handler source should be the last chain node"
         );
+    }
+
+    #[test]
+    fn test_parse_composed_multiple() {
+        let bytes = include_bytes!("../../../tests/fixtures/composed-multiple.wasm");
+        let graph = parse_component(bytes).expect("failed to parse composed-multiple.wasm");
+        assert!(!graph.nodes.is_empty(), "expected at least one component node");
     }
 
     #[test]

@@ -1,22 +1,36 @@
 use crate::get_chain_for;
-use crate::model::{short_interface_name, CompositionGraph, ExportInfo, SYNTHETIC_COMPONENT};
-use crate::output::{DetailLevel, Direction};
+use crate::model::{short_interface_name, CompositionGraph, SYNTHETIC_COMPONENT};
+use crate::output::{connection_type_lines, export_type_lines, SymbolMap, DetailLevel, Direction};
 
 /// Generate a Mermaid diagram from the composition graph
 pub fn generate_mermaid(
     graph: &CompositionGraph,
     detail: DetailLevel,
     direction: Direction,
+    show_types: bool,
 ) -> String {
     match detail {
-        DetailLevel::HandlerChain => generate_handler_chain(graph, direction),
-        DetailLevel::AllInterfaces => generate_all_interfaces(graph, direction),
-        DetailLevel::Full => generate_full(graph, direction),
+        DetailLevel::HandlerChain => generate_handler_chain(graph, direction, show_types),
+        DetailLevel::AllInterfaces => generate_all_interfaces(graph, direction, show_types),
+        DetailLevel::Full => generate_full(graph, direction, show_types),
+    }
+}
+
+/// Build an edge label string, optionally appending WIT function signatures.
+///
+/// When `type_lines` is non-empty the label becomes:
+/// `"base_label\nfn1: sig\nfn2: sig"` — Mermaid renders `\n` as a line break
+/// in most environments.
+fn edge_label(base: &str, type_lines: &[String]) -> String {
+    if type_lines.is_empty() {
+        base.to_string()
+    } else {
+        format!("{}\\n{}", base, type_lines.join("\\n"))
     }
 }
 
 /// Generate a diagram showing only the HTTP handler chain (request flow direction)
-fn generate_handler_chain(graph: &CompositionGraph, direction: Direction) -> String {
+fn generate_handler_chain(graph: &CompositionGraph, direction: Direction, show_types: bool) -> String {
     let mut output = String::new();
     output.push_str(&format!("graph {}\n", direction.to_mermaid()));
 
@@ -27,9 +41,21 @@ fn generate_handler_chain(graph: &CompositionGraph, direction: Direction) -> Str
         return output;
     }
 
+    let mut symbols = SymbolMap::new();
+
+    // Resolve export symbol up front so it's available for the node subgraph label too
+    let export_sym: String = show_types
+        .then(|| {
+            graph.component_exports.iter()
+                .find(|(name, _)| name.contains("wasi:http/handler"))
+                .and_then(|(_, info)| symbols.symbol_for_export(info, &graph.arena))
+                .map(str::to_string)
+        })
+        .flatten()
+        .unwrap_or_default();
+
     // Add subgraph for the handler chain
     output.push_str("    subgraph composition[\"Handler Chain\"]\n");
-
     for &idx in &chain {
         if let Some(node) = graph.get_node(idx) {
             let id = sanitize_for_mermaid(&node.name);
@@ -37,39 +63,59 @@ fn generate_handler_chain(graph: &CompositionGraph, direction: Direction) -> Str
             output.push_str(&format!("        {}[\"{}\"]\n", id, label));
         }
     }
-
     output.push_str("    end\n\n");
 
-    // Add export entry point
+    // Export entry point with symbol
     if let Some(&first_idx) = chain.first() {
         if let Some(first_node) = graph.get_node(first_idx) {
             output.push_str(&format!(
-                "    export([\"Export: handler\"]) --> {}\n",
+                "    export([\"Export: handler{}\"]) --> {}\n",
+                export_sym,
                 sanitize_for_mermaid(&first_node.name)
             ));
         }
     }
 
-    // Add connections between chain elements in request flow order
+    // Connections with symbol on the edge label
     for window in chain.windows(2) {
         if let [from_idx, to_idx] = window {
             if let (Some(from_node), Some(to_node)) =
                 (graph.get_node(*from_idx), graph.get_node(*to_idx))
             {
+                let conn_sym: String = show_types
+                    .then(|| {
+                        from_node.imports.iter()
+                            .find(|c| c.interface_name.contains("wasi:http/handler"))
+                            .and_then(|c| symbols.symbol_for_conn(c, &graph.arena))
+                            .map(str::to_string)
+                    })
+                    .flatten()
+                    .unwrap_or_default();
                 output.push_str(&format!(
-                    "    {} -->|\"handler\"| {}\n",
+                    "    {} -->|\"handler{}\"| {}\n",
                     sanitize_for_mermaid(&from_node.name),
+                    conn_sym,
                     sanitize_for_mermaid(&to_node.name)
                 ));
             }
         }
     }
 
+    // Key subgraph
+    if !symbols.is_empty() {
+        output.push('\n');
+        output.push_str("    subgraph key[\"Key\"]\n");
+        for (i, line) in symbols.key_lines().iter().enumerate() {
+            output.push_str(&format!("        k{}[\"{}\"]\n", i, line));
+        }
+        output.push_str("    end\n");
+    }
+
     output
 }
 
 /// Generate a diagram showing all interface connections
-fn generate_all_interfaces(graph: &CompositionGraph, direction: Direction) -> String {
+fn generate_all_interfaces(graph: &CompositionGraph, direction: Direction, show_types: bool) -> String {
     let mut output = String::new();
     output.push_str(&format!("graph {}\n", direction.to_mermaid()));
 
@@ -107,7 +153,7 @@ fn generate_all_interfaces(graph: &CompositionGraph, direction: Direction) -> St
         for import in &node.imports {
             if import.is_host_import {
                 let host_id = sanitize_for_mermaid(&import.interface_name);
-                let label = import.short_label();
+                let label = edge_label(&import.short_label(), &connection_type_lines(import, &graph.arena, show_types));
                 output.push_str(&format!(
                     "    {} -.->|\"{}\"| {}\n",
                     host_id,
@@ -116,7 +162,7 @@ fn generate_all_interfaces(graph: &CompositionGraph, direction: Direction) -> St
                 ));
             } else if let Some(source_node) = graph.get_node(import.source_instance) {
                 if source_node.component_index != SYNTHETIC_COMPONENT {
-                    let label = import.short_label();
+                    let label = edge_label(&import.short_label(), &connection_type_lines(import, &graph.arena, show_types));
                     output.push_str(&format!(
                         "    {} -->|\"{}\"| {}\n",
                         sanitize_for_mermaid(&source_node.name),
@@ -130,18 +176,11 @@ fn generate_all_interfaces(graph: &CompositionGraph, direction: Direction) -> St
 
     // Add exports
     output.push('\n');
-    for (
-        export_name,
-        ExportInfo {
-            source_instance: source_idx,
-            // TODO: Use the type information to flesh out the visualization more!
-            ..
-        },
-    ) in &graph.component_exports
-    {
-        if let Some(node) = graph.get_node(*source_idx) {
+    for (export_name, export_info) in &graph.component_exports {
+        if let Some(node) = graph.get_node(export_info.source_instance) {
             if node.component_index != SYNTHETIC_COMPONENT {
-                let label = short_interface_name(export_name);
+                let short = short_interface_name(export_name);
+                let label = edge_label(&short, &export_type_lines(export_info, &graph.arena, show_types));
                 output.push_str(&format!(
                     "    {} --> export_{}([\"Export: {}\"])\n",
                     sanitize_for_mermaid(&node.name),
@@ -156,7 +195,7 @@ fn generate_all_interfaces(graph: &CompositionGraph, direction: Direction) -> St
 }
 
 /// Generate a full diagram with all details
-fn generate_full(graph: &CompositionGraph, direction: Direction) -> String {
+fn generate_full(graph: &CompositionGraph, direction: Direction, show_types: bool) -> String {
     let mut output = String::new();
     output.push_str(&format!("graph {}\n", direction.to_mermaid()));
 
@@ -178,10 +217,11 @@ fn generate_full(graph: &CompositionGraph, direction: Direction) -> String {
         for import in &node.imports {
             if !import.is_host_import {
                 if let Some(source_node) = graph.get_node(import.source_instance) {
+                    let label = edge_label(&import.interface_name, &connection_type_lines(import, &graph.arena, show_types));
                     output.push_str(&format!(
                         "    {} -->|\"{}\"| {}\n",
                         sanitize_for_mermaid(&source_node.name),
-                        import.interface_name,
+                        label,
                         sanitize_for_mermaid(&node.name)
                     ));
                 }
@@ -191,21 +231,14 @@ fn generate_full(graph: &CompositionGraph, direction: Direction) -> String {
 
     // Show all exports
     output.push('\n');
-    for (
-        export_name,
-        ExportInfo {
-            source_instance: source_idx,
-            // TODO: Use the type information to flesh out the visualization more!
-            ..
-        },
-    ) in &graph.component_exports
-    {
-        if let Some(node) = graph.get_node(*source_idx) {
+    for (export_name, export_info) in &graph.component_exports {
+        if let Some(node) = graph.get_node(export_info.source_instance) {
+            let label = edge_label(export_name, &export_type_lines(export_info, &graph.arena, show_types));
             output.push_str(&format!(
                 "    {} --> export_{}([\"Export: {}\"])\n",
                 sanitize_for_mermaid(&node.name),
                 sanitize_for_mermaid(export_name),
-                export_name
+                label
             ));
         }
     }
@@ -231,8 +264,9 @@ fn sanitize_for_mermaid(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ComponentNode, InterfaceConnection};
+    use crate::model::{ComponentNode, FuncSignature, InstanceInterface, InterfaceConnection, InterfaceType, ValueType};
     use crate::output::Direction;
+    use std::collections::BTreeMap;
 
     /// Build a graph: host → $srv → $middleware → export(handler)
     fn test_graph() -> CompositionGraph {
@@ -265,14 +299,50 @@ mod tests {
         });
         graph.add_node(2, mw);
 
-        graph.add_export("wasi:http/handler@0.3.0".to_string(), 2, todo!());
+        graph.add_export("wasi:http/handler@0.3.0".to_string(), 2, None);
+        graph
+    }
+
+    /// Build a graph with real type information for type-display tests.
+    fn test_graph_with_types() -> CompositionGraph {
+        let mut graph = CompositionGraph::new();
+
+        let u32_id = graph.arena.intern_val(ValueType::U32);
+        let bool_id = graph.arena.intern_val(ValueType::Bool);
+
+        let handle_sig = FuncSignature { params: vec![u32_id], results: vec![bool_id] };
+        let mut functions = BTreeMap::new();
+        functions.insert("handle".to_string(), handle_sig);
+        let iface_type = InterfaceType::Instance(InstanceInterface { functions });
+
+        let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
+        srv.add_import(InterfaceConnection {
+            interface_name: "wasi:http/handler@0.3.0".to_string(),
+            source_instance: 0,
+            is_host_import: true,
+            interface_type: Some(iface_type.clone()),
+            fingerprint: Some(iface_type.fingerprint(&graph.arena)),
+        });
+        graph.add_node(1, srv);
+
+        let mut mw = ComponentNode::new("$middleware".to_string(), 1, 1);
+        mw.add_import(InterfaceConnection {
+            interface_name: "wasi:http/handler@0.3.0".to_string(),
+            source_instance: 1,
+            is_host_import: false,
+            interface_type: Some(iface_type.clone()),
+            fingerprint: Some(iface_type.fingerprint(&graph.arena)),
+        });
+        graph.add_node(2, mw);
+
+        graph.add_export("wasi:http/handler@0.3.0".to_string(), 2, Some(iface_type));
         graph
     }
 
     #[test]
     fn test_handler_chain_mermaid() {
         let graph = test_graph();
-        let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight);
+        let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, false);
 
         assert!(
             output.starts_with("graph LR\n"),
@@ -303,7 +373,7 @@ mod tests {
     #[test]
     fn test_all_interfaces_mermaid() {
         let graph = test_graph();
-        let output = generate_mermaid(&graph, DetailLevel::AllInterfaces, Direction::LeftToRight);
+        let output = generate_mermaid(&graph, DetailLevel::AllInterfaces, Direction::LeftToRight, false);
 
         assert!(output.starts_with("graph LR\n"));
         // Host imports subgraph
@@ -334,7 +404,7 @@ mod tests {
     #[test]
     fn test_full_mermaid() {
         let graph = test_graph();
-        let output = generate_mermaid(&graph, DetailLevel::Full, Direction::TopDown);
+        let output = generate_mermaid(&graph, DetailLevel::Full, Direction::TopDown, false);
 
         assert!(output.starts_with("graph TD\n"), "should use TD direction");
         assert!(
@@ -352,11 +422,35 @@ mod tests {
     fn test_empty_graph_mermaid() {
         let graph = CompositionGraph::new();
 
-        let chain = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight);
+        let chain = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, false);
         assert!(chain.contains("No HTTP handler chain found"));
 
-        let all = generate_mermaid(&graph, DetailLevel::AllInterfaces, Direction::LeftToRight);
+        let all = generate_mermaid(&graph, DetailLevel::AllInterfaces, Direction::LeftToRight, false);
         assert!(all.contains("No component instances found"));
+    }
+
+    #[test]
+    fn test_show_types_all_interfaces() {
+        let graph = test_graph_with_types();
+        let output = generate_mermaid(&graph, DetailLevel::AllInterfaces, Direction::LeftToRight, true);
+
+        assert!(output.contains("`handle`: (u32) -> bool"), "should embed function signature in edge label");
+    }
+
+    #[test]
+    fn test_show_types_full() {
+        let graph = test_graph_with_types();
+        let output = generate_mermaid(&graph, DetailLevel::Full, Direction::LeftToRight, true);
+
+        assert!(output.contains("`handle`: (u32) -> bool"), "should embed function signature in edge label");
+    }
+
+    #[test]
+    fn test_hide_types_mermaid() {
+        let graph = test_graph_with_types();
+        let output = generate_mermaid(&graph, DetailLevel::AllInterfaces, Direction::LeftToRight, false);
+
+        assert!(!output.contains("`handle`: (u32) -> bool"), "should not show signatures when types disabled");
     }
 
     #[test]
