@@ -1,6 +1,6 @@
-use crate::get_chain_for;
-use crate::model::{short_interface_name, CompositionGraph, SYNTHETIC_COMPONENT};
-use crate::output::{connection_type_lines, export_type_lines, SymbolMap, DetailLevel};
+use crate::{find_chain_interfaces, get_chain_for};
+use crate::model::{short_interface_name, CompositionGraph};
+use crate::output::{build_all_interfaces_view, build_full_view, SymbolMap, DetailLevel};
 
 /// Generate an ASCII diagram from the composition graph
 pub fn generate_ascii(graph: &CompositionGraph, detail: DetailLevel, show_types: bool) -> String {
@@ -11,88 +11,97 @@ pub fn generate_ascii(graph: &CompositionGraph, detail: DetailLevel, show_types:
     }
 }
 
-/// Generate ASCII diagram showing only the HTTP handler chain (request flow direction)
+/// Generate ASCII diagram showing all middleware chains (request flow direction)
 fn generate_handler_chain_ascii(graph: &CompositionGraph, show_types: bool) -> String {
-    let chain = get_chain_for(graph, "wasi:http/handler");
+    let chain_interfaces = find_chain_interfaces(graph);
 
-    if chain.is_empty() {
-        return box_content("Handler Chain", &["No HTTP handler chain found"]);
+    if chain_interfaces.is_empty() {
+        return box_content("Middleware Chains", &["No middleware chains found"]);
     }
 
     let mut symbols = SymbolMap::new();
     let mut lines = Vec::new();
 
-    // Resolve the symbol for the handler export (shared by all chain edges)
-    let export_sym: String = show_types
-        .then(|| {
-            graph.component_exports.iter()
-                .find(|(name, _)| name.contains("wasi:http/handler"))
-                .and_then(|(_, info)| symbols.symbol_for_export(info, &graph.arena))
-                .map(str::to_string)
-        })
-        .flatten()
-        .unwrap_or_default();
-
-    // Export entry point
-    if let Some(&first_idx) = chain.first() {
-        if let Some(first_node) = graph.get_node(first_idx) {
-            lines.push(format!(
-                "[Export: handler{}] ──> {}",
-                export_sym,
-                first_node.display_label()
-            ));
+    for (i, iface) in chain_interfaces.iter().enumerate() {
+        let chain = get_chain_for(graph, iface);
+        if chain.is_empty() {
+            continue;
         }
-    }
 
-    // Chain connections
-    for window in chain.windows(2) {
-        if let [from_idx, to_idx] = window {
-            if let (Some(from_node), Some(to_node)) =
-                (graph.get_node(*from_idx), graph.get_node(*to_idx))
-            {
-                let conn_sym: String = show_types
-                    .then(|| {
-                        from_node.imports.iter()
-                            .find(|c| c.interface_name.contains("wasi:http/handler"))
-                            .and_then(|c| symbols.symbol_for_conn(c, &graph.arena))
-                            .map(str::to_string)
-                    })
-                    .flatten()
-                    .unwrap_or_default();
+        // Separator between chains
+        if i > 0 {
+            lines.push(String::new());
+        }
+
+        let short = short_interface_name(iface);
+
+        let export_sym: String = show_types
+            .then(|| {
+                graph.component_exports.get(iface.as_str())
+                    .and_then(|info| symbols.symbol_for_export(info, &graph.arena))
+                    .map(str::to_string)
+            })
+            .flatten()
+            .unwrap_or_default();
+
+        // Export entry point
+        if let Some(&first_idx) = chain.first() {
+            if let Some(first_node) = graph.get_node(first_idx) {
                 lines.push(format!(
-                    "{} ──handler{}──> {}",
-                    from_node.display_label(),
-                    conn_sym,
-                    to_node.display_label()
+                    "[Export: {}{}] ──> {}",
+                    short, export_sym,
+                    first_node.display_label()
                 ));
+            }
+        }
+
+        // Chain connections
+        for window in chain.windows(2) {
+            if let [from_idx, to_idx] = window {
+                if let (Some(from_node), Some(to_node)) =
+                    (graph.get_node(*from_idx), graph.get_node(*to_idx))
+                {
+                    let conn_sym: String = show_types
+                        .then(|| {
+                            from_node.imports.iter()
+                                .find(|c| &c.interface_name == iface)
+                                .and_then(|c| symbols.symbol_for_conn(c, &graph.arena))
+                                .map(str::to_string)
+                        })
+                        .flatten()
+                        .unwrap_or_default();
+                    lines.push(format!(
+                        "{} ──{}{}──> {}",
+                        from_node.display_label(),
+                        short, conn_sym,
+                        to_node.display_label()
+                    ));
+                }
             }
         }
     }
 
-    // Key
+    // Key — shared across all chains
     if !symbols.is_empty() {
         lines.push(String::new());
         lines.extend(symbols.key_lines());
     }
 
-    box_content("Handler Chain", &lines)
+    box_content("Middleware Chains", &lines)
 }
 
 /// Generate ASCII diagram showing all interface connections
 fn generate_all_interfaces_ascii(graph: &CompositionGraph, show_types: bool) -> String {
-    let mut output = String::new();
+    let view = build_all_interfaces_view(graph, show_types);
 
-    let component_nodes = graph.real_nodes();
-
-    if component_nodes.is_empty() {
+    if view.nodes.is_empty() {
         return box_content("Component Instances", &["No component instances found"]);
     }
 
-    let host_interfaces = graph.host_interfaces();
+    let mut output = String::new();
 
-    // Host imports section
-    if !host_interfaces.is_empty() {
-        let host_lines: Vec<String> = host_interfaces
+    if !view.host_names.is_empty() {
+        let host_lines: Vec<String> = view.host_names
             .iter()
             .map(|i| format!("  {{{}}}", short_interface_name(i)))
             .collect();
@@ -100,61 +109,34 @@ fn generate_all_interfaces_ascii(graph: &CompositionGraph, show_types: bool) -> 
         output.push('\n');
     }
 
-    // Component instances section
-    let instance_lines: Vec<String> = component_nodes
+    let instance_lines: Vec<String> = view.nodes
         .iter()
-        .map(|n| format!("  [{}]", n.display_label()))
+        .map(|n| format!("  [{}]", n.display))
         .collect();
     output.push_str(&box_content("Component Instances", &instance_lines));
     output.push('\n');
 
-    // Connections section
     let mut connection_lines = Vec::new();
-
-    // Host imports connections
-    for node in &component_nodes {
-        for import in &node.imports {
-            if import.is_host_import {
-                let label = short_interface_name(&import.interface_name);
-                connection_lines.push(format!(
-                    "  {{{}}} -.{}.- [{}]",
-                    label,
-                    import.short_label(),
-                    node.display_label()
-                ));
-                for line in connection_type_lines(import, &graph.arena, show_types) {
-                    connection_lines.push(format!("      {}", line));
-                }
-            } else if let Some(source_node) = graph.get_node(import.source_instance) {
-                if source_node.component_index != SYNTHETIC_COMPONENT {
-                    connection_lines.push(format!(
-                        "  [{}] ──{}──> [{}]",
-                        source_node.display_label(),
-                        import.short_label(),
-                        node.display_label()
-                    ));
-                    for line in connection_type_lines(import, &graph.arena, show_types) {
-                        connection_lines.push(format!("      {}", line));
-                    }
-                }
-            }
+    for edge in &view.edges {
+        if edge.is_dashed {
+            connection_lines.push(format!(
+                "  {{{}}} -.{}.- [{}]",
+                edge.from_display, edge.label, edge.to_display
+            ));
+        } else {
+            connection_lines.push(format!(
+                "  [{}] ──{}──> [{}]",
+                edge.from_display, edge.label, edge.to_display
+            ));
+        }
+        for line in &edge.type_lines {
+            connection_lines.push(format!("      {}", line));
         }
     }
-
-    // Exports
-    for (export_name, export_info) in &graph.component_exports {
-        if let Some(node) = graph.get_node(export_info.source_instance) {
-            if node.component_index != SYNTHETIC_COMPONENT {
-                let label = short_interface_name(export_name);
-                connection_lines.push(format!(
-                    "  [{}] ──> (Export: {})",
-                    node.display_label(),
-                    label
-                ));
-                for line in export_type_lines(export_info, &graph.arena, show_types) {
-                    connection_lines.push(format!("      {}", line));
-                }
-            }
+    for exp in &view.exports {
+        connection_lines.push(format!("  [{}] ──> (Export: {})", exp.from_display, exp.short_name));
+        for line in &exp.type_lines {
+            connection_lines.push(format!("      {}", line));
         }
     }
 
@@ -167,61 +149,41 @@ fn generate_all_interfaces_ascii(graph: &CompositionGraph, show_types: bool) -> 
 
 /// Generate a full ASCII diagram with all details
 fn generate_full_ascii(graph: &CompositionGraph, show_types: bool) -> String {
-    let mut output = String::new();
+    let view = build_full_view(graph, show_types);
 
-    // All instances section
-    let mut instance_lines = Vec::new();
-    for node in graph.nodes.values() {
-        let label = if node.component_index == SYNTHETIC_COMPONENT {
-            format!("  [{}] (synthetic)", node.display_label())
-        } else {
-            format!(
-                "  [{}] [comp:{}]",
-                node.display_label(),
-                node.component_index
-            )
-        };
-        instance_lines.push(label);
-    }
+    let mut instance_lines: Vec<String> = view.nodes
+        .iter()
+        .map(|n| {
+            if n.is_synthetic {
+                format!("  [{}] (synthetic)", n.display)
+            } else {
+                format!("  [{}] [comp:{}]", n.display, n.component_index)
+            }
+        })
+        .collect();
 
     if instance_lines.is_empty() {
         instance_lines.push("  No instances found".to_string());
     }
 
+    let mut output = String::new();
     output.push_str(&box_content("All Instances", &instance_lines));
     output.push('\n');
 
-    // All connections with full interface names
     let mut connection_lines = Vec::new();
-    for node in graph.nodes.values() {
-        for import in &node.imports {
-            if !import.is_host_import {
-                if let Some(source_node) = graph.get_node(import.source_instance) {
-                    connection_lines.push(format!(
-                        "  [{}] ──{}──> [{}]",
-                        source_node.display_label(),
-                        &import.interface_name,
-                        node.display_label()
-                    ));
-                    for line in connection_type_lines(import, &graph.arena, show_types) {
-                        connection_lines.push(format!("      {}", line));
-                    }
-                }
-            }
+    for edge in &view.edges {
+        connection_lines.push(format!(
+            "  [{}] ──{}──> [{}]",
+            edge.from_display, edge.label, edge.to_display
+        ));
+        for line in &edge.type_lines {
+            connection_lines.push(format!("      {}", line));
         }
     }
-
-    // All exports with full names
-    for (export_name, export_info) in &graph.component_exports {
-        if let Some(node) = graph.get_node(export_info.source_instance) {
-            connection_lines.push(format!(
-                "  [{}] ──> (Export: {})",
-                node.display_label(),
-                export_name
-            ));
-            for line in export_type_lines(export_info, &graph.arena, show_types) {
-                connection_lines.push(format!("      {}", line));
-            }
+    for exp in &view.exports {
+        connection_lines.push(format!("  [{}] ──> (Export: {})", exp.from_display, exp.full_name));
+        for line in &exp.type_lines {
+            connection_lines.push(format!("      {}", line));
         }
     }
 
@@ -381,7 +343,7 @@ mod tests {
         let graph = test_graph();
         let output = generate_ascii(&graph, DetailLevel::HandlerChain, false);
 
-        assert!(output.contains("Handler Chain"), "should have title");
+        assert!(output.contains("Middleware Chains"), "should have title");
         assert!(output.contains("srv"), "should show srv node");
         assert!(output.contains("middleware"), "should show middleware node");
         assert!(output.contains("handler"), "should show handler label");
@@ -429,7 +391,7 @@ mod tests {
         let graph = CompositionGraph::new();
 
         let chain = generate_ascii(&graph, DetailLevel::HandlerChain, false);
-        assert!(chain.contains("No HTTP handler chain found"), "{}", chain);
+        assert!(chain.contains("No middleware chains found"), "{}", chain);
 
         let all = generate_ascii(&graph, DetailLevel::AllInterfaces, false);
         assert!(all.contains("No component instances found"));

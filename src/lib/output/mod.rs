@@ -2,7 +2,7 @@ pub mod ascii;
 // pub mod json;
 pub mod mermaid;
 
-use crate::model::{ExportInfo, FuncSignature, InterfaceConnection, InterfaceType, InternedId, TypeArena};
+use crate::model::{short_interface_name, CompositionGraph, ExportInfo, FuncSignature, InterfaceConnection, InterfaceType, InternedId, TypeArena, SYNTHETIC_COMPONENT};
 
 /// Format a function signature as `(param-type, ...) -> result-type`.
 pub(crate) fn format_func_sig(sig: &FuncSignature, arena: &TypeArena) -> String {
@@ -165,6 +165,167 @@ impl SymbolMap {
         }
         out
     }
+}
+
+// ---------------------------------------------------------------------------
+// Intermediate representation — shared graph traversal
+// ---------------------------------------------------------------------------
+
+/// A node to be rendered in the diagram.
+pub(crate) struct DiagramNode {
+    pub name: String,
+    pub display: String,
+    pub is_synthetic: bool,
+    pub component_index: u32,
+}
+
+/// A directed edge between two nodes.
+pub(crate) struct DiagramEdge {
+    /// Raw name of the source (interface_name for host imports, node.name otherwise).
+    /// Renderers that need sanitized IDs (Mermaid) apply their own transform.
+    pub from_name: String,
+    pub from_display: String,
+    pub to_name: String,
+    pub to_display: String,
+    /// Ready-to-use edge label (short interface name or full name, depending on mode).
+    pub label: String,
+    pub type_lines: Vec<String>,
+    /// true if host import
+    pub is_dashed: bool,
+}
+
+/// An exported interface.
+pub(crate) struct DiagramExport {
+    pub from_name: String,
+    pub from_display: String,
+    pub full_name: String,
+    pub short_name: String,
+    pub type_lines: Vec<String>,
+}
+
+/// Pre-computed graph data for rendering, independent of output format.
+pub(crate) struct ConnectionsView {
+    /// Raw host interface names (AllInterfaces only; empty for Full).
+    pub host_names: Vec<String>,
+    pub nodes: Vec<DiagramNode>,
+    pub edges: Vec<DiagramEdge>,
+    pub exports: Vec<DiagramExport>,
+}
+
+/// Build a [`ConnectionsView`] for `AllInterfaces` detail level.
+///
+/// Includes real (non-synthetic) component nodes, host-import edges (dashed),
+/// inter-component edges (solid), and exported interfaces.  Edge labels use
+/// the short interface name.
+pub(crate) fn build_all_interfaces_view(graph: &CompositionGraph, show_types: bool) -> ConnectionsView {
+    let component_nodes = graph.real_nodes();
+
+    let nodes = component_nodes
+        .iter()
+        .map(|n| DiagramNode {
+            name: n.name.clone(),
+            display: n.display_label().to_string(),
+            is_synthetic: false,
+            component_index: n.component_index,
+        })
+        .collect();
+
+    let mut edges = Vec::new();
+    for node in &component_nodes {
+        for import in &node.imports {
+            if import.is_host_import {
+                edges.push(DiagramEdge {
+                    from_name: import.interface_name.clone(),
+                    from_display: short_interface_name(&import.interface_name),
+                    to_name: node.name.clone(),
+                    to_display: node.display_label().to_string(),
+                    label: import.short_label(),
+                    type_lines: connection_type_lines(import, &graph.arena, show_types),
+                    is_dashed: true,
+                });
+            } else if let Some(src) = graph.get_node(import.source_instance) {
+                if src.component_index != SYNTHETIC_COMPONENT {
+                    edges.push(DiagramEdge {
+                        from_name: src.name.clone(),
+                        from_display: src.display_label().to_string(),
+                        to_name: node.name.clone(),
+                        to_display: node.display_label().to_string(),
+                        label: import.short_label(),
+                        type_lines: connection_type_lines(import, &graph.arena, show_types),
+                        is_dashed: false,
+                    });
+                }
+            }
+        }
+    }
+
+    let mut exports = Vec::new();
+    for (export_name, export_info) in &graph.component_exports {
+        if let Some(node) = graph.get_node(export_info.source_instance) {
+            if node.component_index != SYNTHETIC_COMPONENT {
+                exports.push(DiagramExport {
+                    from_name: node.name.clone(),
+                    from_display: node.display_label().to_string(),
+                    full_name: export_name.clone(),
+                    short_name: short_interface_name(export_name),
+                    type_lines: export_type_lines(export_info, &graph.arena, show_types),
+                });
+            }
+        }
+    }
+
+    ConnectionsView { host_names: graph.host_interfaces(), nodes, edges, exports }
+}
+
+/// Build a [`ConnectionsView`] for `Full` detail level.
+///
+/// Includes all nodes (including synthetic), all non-host-import edges with
+/// full interface names, and all exported interfaces.
+pub(crate) fn build_full_view(graph: &CompositionGraph, show_types: bool) -> ConnectionsView {
+    let nodes = graph
+        .nodes
+        .values()
+        .map(|n| DiagramNode {
+            name: n.name.clone(),
+            display: n.display_label().to_string(),
+            is_synthetic: n.component_index == SYNTHETIC_COMPONENT,
+            component_index: n.component_index,
+        })
+        .collect();
+
+    let mut edges = Vec::new();
+    for node in graph.nodes.values() {
+        for import in &node.imports {
+            if !import.is_host_import {
+                if let Some(src) = graph.get_node(import.source_instance) {
+                    edges.push(DiagramEdge {
+                        from_name: src.name.clone(),
+                        from_display: src.display_label().to_string(),
+                        to_name: node.name.clone(),
+                        to_display: node.display_label().to_string(),
+                        label: import.interface_name.clone(),
+                        type_lines: connection_type_lines(import, &graph.arena, show_types),
+                        is_dashed: false,
+                    });
+                }
+            }
+        }
+    }
+
+    let mut exports = Vec::new();
+    for (export_name, export_info) in &graph.component_exports {
+        if let Some(node) = graph.get_node(export_info.source_instance) {
+            exports.push(DiagramExport {
+                from_name: node.name.clone(),
+                from_display: node.display_label().to_string(),
+                full_name: export_name.clone(),
+                short_name: short_interface_name(export_name),
+                type_lines: export_type_lines(export_info, &graph.arena, show_types),
+            });
+        }
+    }
+
+    ConnectionsView { host_names: vec![], nodes, edges, exports }
 }
 
 /// Output format for visualization

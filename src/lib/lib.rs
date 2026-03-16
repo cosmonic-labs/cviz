@@ -1,4 +1,5 @@
 use crate::model::{CompositionGraph, ExportInfo, InterfaceConnection};
+use std::collections::HashSet;
 
 pub mod model;
 pub mod output;
@@ -7,6 +8,28 @@ pub mod parse;
 /// Check if this is the connection for a specific interface
 pub fn is_connection_for(conn: &InterfaceConnection, interface_name: &str) -> bool {
     conn.interface_name.contains(interface_name)
+}
+
+/// Find all interfaces that form a middleware chain in the composition.
+///
+/// An interface forms a chain when it is both:
+/// - exported by the final composed component, and
+/// - imported by at least one real component instance from another real
+///   component instance (i.e. not from the host).
+///
+/// This captures the middleware pattern generically, without assuming any
+/// specific interface name.
+pub fn find_chain_interfaces(graph: &CompositionGraph) -> Vec<String> {
+    let inter_component: HashSet<&str> = graph.nodes.values()
+        .flat_map(|n| n.imports.iter())
+        .filter(|c| !c.is_host_import)
+        .map(|c| c.interface_name.as_str())
+        .collect();
+
+    graph.component_exports.keys()
+        .filter(|name| inter_component.contains(name.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// Get the chain in request-flow order (outermost → innermost).
