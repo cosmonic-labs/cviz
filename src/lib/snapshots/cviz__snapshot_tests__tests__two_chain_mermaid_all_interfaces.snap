@@ -1,0 +1,26 @@
+---
+source: src/lib/snapshot_tests.rs
+assertion_line: 86
+expression: "mermaid_snap(&two_chain_graph(), DetailLevel::AllInterfaces, false)"
+---
+%%{init: {'flowchart': {'wrappingWidth': 600}}}%%
+graph LR
+    subgraph host["Host Imports"]
+        wasi_http_handler_0_3_0["handler"]
+        wasi_keyvalue_store_0_1_0["store"]
+    end
+
+    subgraph composition["Component Instances"]
+        srv_http["srv-http"]
+        mw_http["mw-http"]
+        db["db"]
+        cache["cache"]
+    end
+
+    wasi_http_handler_0_3_0 -->|"handler"| srv_http
+    srv_http ──>|"handler"| mw_http
+    wasi_keyvalue_store_0_1_0 -->|"store"| db
+    db ──>|"store"| cache
+
+    mw_http --> export_wasi_http_handler_0_3_0(["Export: handler"])
+    cache --> export_wasi_keyvalue_store_0_1_0(["Export: store"])

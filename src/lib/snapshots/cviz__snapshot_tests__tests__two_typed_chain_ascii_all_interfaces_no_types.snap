@@ -1,0 +1,29 @@
+---
+source: src/lib/snapshot_tests.rs
+assertion_line: 290
+expression: "ascii_snap(&two_typed_chain_graph(), DetailLevel::AllInterfaces, false)"
+---
+┌──────────────────┐
+│   Host Imports   │
+├──────────────────┤
+│  {handler}       │
+│  {store}         │
+└──────────────────┘
+┌─────────────────────────┐
+│   Component Instances   │
+├─────────────────────────┤
+│  [srv-http]             │
+│  [mw-http]              │
+│  [db]                   │
+│  [cache]                │
+└─────────────────────────┘
+┌──────────────────────────────────────────┐
+│               Connections                │
+├──────────────────────────────────────────┤
+│  {handler} --- handler --- [srv-http]    │
+│  [srv-http] ── handler ──> [mw-http]     │
+│  {store} --- store --- [db]              │
+│  [db] ── store ──> [cache]               │
+│  [mw-http] ──> (Export: handler)         │
+│  [cache] ──> (Export: store)             │
+└──────────────────────────────────────────┘

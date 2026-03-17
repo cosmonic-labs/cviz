@@ -1,0 +1,19 @@
+---
+source: src/lib/snapshot_tests.rs
+assertion_line: 110
+expression: "ascii_snap(&long_chain_graph(), DetailLevel::Full, false)"
+---
+┌────────────────────────┐
+│     All Instances      │
+├────────────────────────┤
+│  [backend] [comp:0]    │
+│  [service] [comp:1]    │
+│  [gateway] [comp:2]    │
+└────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                         Connections                          │
+├──────────────────────────────────────────────────────────────┤
+│  [backend] ── wasi:messaging/consumer@0.2.0 ──> [service]    │
+│  [service] ── wasi:messaging/consumer@0.2.0 ──> [gateway]    │
+│  [gateway] ──> (Export: wasi:messaging/consumer@0.2.0)       │
+└──────────────────────────────────────────────────────────────┘

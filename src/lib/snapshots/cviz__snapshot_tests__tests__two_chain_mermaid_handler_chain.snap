@@ -1,0 +1,18 @@
+---
+source: src/lib/snapshot_tests.rs
+assertion_line: 81
+expression: "mermaid_snap(&two_chain_graph(), DetailLevel::HandlerChain, false)"
+---
+%%{init: {'flowchart': {'wrappingWidth': 600}}}%%
+graph LR
+    subgraph composition["Service Chains"]
+        mw_http["mw-http"]
+        srv_http["srv-http"]
+        cache["cache"]
+        db["db"]
+    end
+
+    export_wasi_http_handler_0_3_0(["Export: handler"]) --> mw_http
+    mw_http -->|"handler"| srv_http
+    export_wasi_keyvalue_store_0_1_0(["Export: store"]) --> cache
+    cache -->|"store"| db

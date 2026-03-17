@@ -1,0 +1,22 @@
+---
+source: src/lib/snapshot_tests.rs
+assertion_line: 120
+expression: "mermaid_snap(&long_chain_graph(), DetailLevel::AllInterfaces, false)"
+---
+%%{init: {'flowchart': {'wrappingWidth': 600}}}%%
+graph LR
+    subgraph host["Host Imports"]
+        wasi_messaging_consumer_0_2_0["consumer"]
+    end
+
+    subgraph composition["Component Instances"]
+        backend["backend"]
+        service["service"]
+        gateway["gateway"]
+    end
+
+    wasi_messaging_consumer_0_2_0 -->|"consumer"| backend
+    backend ──>|"consumer"| service
+    service ──>|"consumer"| gateway
+
+    gateway --> export_wasi_messaging_consumer_0_2_0(["Export: consumer"])

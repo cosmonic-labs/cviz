@@ -1,11 +1,17 @@
-use crate::model::{ComponentNode, CompositionGraph, InterfaceConnection};
+use crate::model::{
+    ComponentNode, CompositionGraph, FuncSignature, InstanceInterface, InterfaceConnection,
+    InterfaceType, TypeArena, ValueType, ValueTypeId,
+};
 use anyhow::Result;
 use std::collections::HashMap;
-use wirm::ir::component::refs::GetItemRef;
+use wirm::ir::component::concrete::{ConcreteFuncType, ConcreteType, ConcreteValType};
+use wirm::ir::component::refs::{GetCompRefs, GetItemRef};
 use wirm::ir::component::visitor::{
     walk_structural, ComponentVisitor, ItemKind, ResolvedItem, VisitCtx,
 };
-use wirm::wasmparser::{ComponentAlias, ComponentExport, ComponentInstance, ComponentTypeRef};
+use wirm::wasmparser::{
+    ComponentAlias, ComponentExport, ComponentInstance, ComponentTypeRef, PrimitiveValType,
+};
 use wirm::Component;
 
 /// Parse a WebAssembly component file and extract its composition graph
@@ -73,31 +79,56 @@ impl ComponentVisitor<'_> for Visitor {
                 component_index,
                 args,
             } => {
+                let instantiated_comp = if let ResolvedItem::Component(_, comp) =
+                    cx.resolve(&instance.get_comp_refs().first().unwrap().ref_)
+                {
+                    Some(comp)
+                } else {
+                    None
+                };
+
                 let comp_num = self.comp_id_to_num.last().unwrap()[component_index];
                 let mut node = ComponentNode::new(name, *component_index, comp_num);
 
                 // Process the "with" arguments - these are the interface connections
                 for arg in args.iter() {
                     let interface_name = arg.name.to_string();
+                    let interface_type =
+                        pull_type_info(&interface_name, &instantiated_comp, &mut self.graph);
 
                     // The arg.index is the instance providing this interface
                     // It might be an alias, so resolve it to the actual source instance
                     let item = cx.resolve(&arg.get_item_ref().ref_);
                     match item {
                         ResolvedItem::CompInst(inst_id, _) => {
-                            let connection =
-                                InterfaceConnection::from_instance(interface_name, inst_id);
+                            let connection = InterfaceConnection::from_instance(
+                                interface_name,
+                                inst_id,
+                                interface_type,
+                                &self.graph.arena,
+                            );
                             node.add_import(connection);
                         }
                         ResolvedItem::Import(id, imp) => {
                             if let ComponentTypeRef::Instance(_) = imp.ty {
-                                let connection =
-                                    InterfaceConnection::from_instance(interface_name, id);
+                                let connection = InterfaceConnection::from_instance(
+                                    interface_name,
+                                    id,
+                                    interface_type,
+                                    &self.graph.arena,
+                                );
                                 node.add_import(connection);
                             }
                         }
                         ResolvedItem::Alias(_, alias) => {
-                            resolve_inst_alias(cx, alias, &interface_name, &mut node);
+                            resolve_inst_alias(
+                                cx,
+                                alias,
+                                &interface_name,
+                                interface_type,
+                                &mut node,
+                                &self.graph.arena,
+                            );
                         }
                         _ => {}
                     }
@@ -118,8 +149,10 @@ impl ComponentVisitor<'_> for Visitor {
 
         // Only track instance exports
         match item {
-            ResolvedItem::CompInst(inst_id, _) => {
-                self.graph.add_export(export_name, inst_id);
+            ResolvedItem::CompInst(inst_id, inst) => {
+                let iface_type =
+                    pull_export_type_from_instance(&export_name, inst, &mut self.graph, cx);
+                self.graph.add_export(export_name, inst_id, iface_type);
             }
             ResolvedItem::Alias(_, alias) => {
                 resolve_imp_alias(cx, alias, &export_name, &mut self.graph);
@@ -129,23 +162,147 @@ impl ComponentVisitor<'_> for Visitor {
     }
 }
 
+fn pull_export_type_from_instance(
+    export_name: &str,
+    inst: &ComponentInstance,
+    graph: &mut CompositionGraph,
+    cx: &VisitCtx,
+) -> Option<InterfaceType> {
+    let comp_ref = inst.get_comp_refs().into_iter().next()?;
+    let comp = match cx.resolve(&comp_ref.ref_) {
+        ResolvedItem::Component(_, c) => c,
+        _ => return None,
+    };
+    concrete_to_interface_type(comp.concretize_export(export_name)?, &mut graph.arena)
+}
+
+fn pull_type_info(
+    interface_name: &str,
+    instantiated_comp: &Option<&Component>,
+    graph: &mut CompositionGraph,
+) -> Option<InterfaceType> {
+    let comp = (*instantiated_comp)?;
+    concrete_to_interface_type(comp.concretize_import(interface_name)?, &mut graph.arena)
+}
+
+fn concrete_to_interface_type<'a>(
+    ty: ConcreteType<'a>,
+    arena: &mut TypeArena,
+) -> Option<InterfaceType> {
+    match ty {
+        ConcreteType::Instance(funcs) => {
+            let functions = funcs
+                .into_iter()
+                .map(|(name, ft)| (name.to_string(), concrete_to_func_sig(ft, arena)))
+                .collect();
+            Some(InterfaceType::Instance(InstanceInterface { functions }))
+        }
+        ConcreteType::Func(ft) => Some(InterfaceType::Func(concrete_to_func_sig(ft, arena))),
+        ConcreteType::Resource => None,
+    }
+}
+
+fn intern<'a>(ty: ConcreteValType<'a>, arena: &mut TypeArena) -> ValueTypeId {
+    let vt = concrete_to_val_type(ty, arena);
+    arena.intern_val(vt)
+}
+
+fn concrete_to_func_sig<'a>(ft: ConcreteFuncType<'a>, arena: &mut TypeArena) -> FuncSignature {
+    let params = ft
+        .params
+        .into_iter()
+        .map(|(_, ty)| intern(ty, arena))
+        .collect();
+    let results = ft.result.map(|ty| intern(ty, arena)).into_iter().collect();
+    FuncSignature { params, results }
+}
+
+fn concrete_to_val_type<'a>(ty: ConcreteValType<'a>, arena: &mut TypeArena) -> ValueType {
+    match ty {
+        ConcreteValType::Primitive(p) => prim_to_val_type(p),
+        ConcreteValType::Record(fields) => ValueType::Record(
+            fields
+                .into_iter()
+                .map(|(name, ty)| (name.to_string(), intern(*ty, arena)))
+                .collect(),
+        ),
+        ConcreteValType::Variant(cases) => ValueType::Variant(
+            cases
+                .into_iter()
+                .map(|(name, ty)| (name.to_string(), ty.map(|t| intern(*t, arena))))
+                .collect(),
+        ),
+        ConcreteValType::List(ty) => ValueType::List(intern(*ty, arena)),
+        ConcreteValType::FixedSizeList(ty, size) => {
+            ValueType::FixedSizeList(intern(*ty, arena), size)
+        }
+        ConcreteValType::Tuple(types) => {
+            ValueType::Tuple(types.into_iter().map(|ty| intern(ty, arena)).collect())
+        }
+        ConcreteValType::Option(ty) => ValueType::Option(intern(*ty, arena)),
+        ConcreteValType::Result { ok, err } => ValueType::Result {
+            ok: ok.map(|t| intern(*t, arena)),
+            err: err.map(|t| intern(*t, arena)),
+        },
+        ConcreteValType::Flags(names) => {
+            ValueType::Flags(names.iter().map(|s| s.to_string()).collect())
+        }
+        ConcreteValType::Enum(names) => {
+            ValueType::Enum(names.iter().map(|s| s.to_string()).collect())
+        }
+        ConcreteValType::Map(key, val) => ValueType::Map(intern(*key, arena), intern(*val, arena)),
+        ConcreteValType::Resource => ValueType::Resource,
+        ConcreteValType::AsyncHandle => ValueType::AsyncHandle,
+    }
+}
+
+fn prim_to_val_type(p: PrimitiveValType) -> ValueType {
+    match p {
+        PrimitiveValType::Bool => ValueType::Bool,
+        PrimitiveValType::S8 => ValueType::S8,
+        PrimitiveValType::U8 => ValueType::U8,
+        PrimitiveValType::S16 => ValueType::S16,
+        PrimitiveValType::U16 => ValueType::U16,
+        PrimitiveValType::S32 => ValueType::S32,
+        PrimitiveValType::U32 => ValueType::U32,
+        PrimitiveValType::S64 => ValueType::S64,
+        PrimitiveValType::U64 => ValueType::U64,
+        PrimitiveValType::F32 => ValueType::F32,
+        PrimitiveValType::F64 => ValueType::F64,
+        PrimitiveValType::Char => ValueType::Char,
+        PrimitiveValType::String => ValueType::String,
+        PrimitiveValType::ErrorContext => ValueType::ErrorContext,
+    }
+}
+
 fn resolve_inst_alias(
     cx: &VisitCtx,
     alias: &ComponentAlias,
     interface_name: &str,
+    interface_type: Option<InterfaceType>,
     node: &mut ComponentNode,
+    arena: &TypeArena,
 ) {
     let inst_ref = alias.get_item_ref();
 
     match cx.resolve(&inst_ref.ref_) {
         ResolvedItem::CompInst(inst_id, _) => {
-            let connection =
-                InterfaceConnection::from_instance(interface_name.to_string(), inst_id);
+            let connection = InterfaceConnection::from_instance(
+                interface_name.to_string(),
+                inst_id,
+                interface_type,
+                arena,
+            );
             node.add_import(connection);
         }
-        ResolvedItem::Alias(_, nested_alias) => {
-            resolve_inst_alias(cx, nested_alias, interface_name, node)
-        }
+        ResolvedItem::Alias(_, nested_alias) => resolve_inst_alias(
+            cx,
+            nested_alias,
+            interface_name,
+            interface_type,
+            node,
+            arena,
+        ),
         _ => {}
     }
 }
@@ -158,7 +315,10 @@ fn resolve_imp_alias(
     let inst_ref = alias.get_item_ref();
 
     match cx.resolve(&inst_ref.ref_) {
-        ResolvedItem::CompInst(inst_id, _) => graph.add_export(export_name.to_string(), inst_id),
+        ResolvedItem::CompInst(inst_id, inst) => {
+            let iface_type = pull_export_type_from_instance(export_name, inst, graph, cx);
+            graph.add_export(export_name.to_string(), inst_id, iface_type);
+        }
         ResolvedItem::Alias(_, nested_alias) => {
             resolve_imp_alias(cx, nested_alias, export_name, graph)
         }
@@ -282,6 +442,16 @@ mod tests {
         assert_eq!(
             first_handler.source_instance, chain[1],
             "first node's handler source should be the last chain node"
+        );
+    }
+
+    #[test]
+    fn test_parse_composed_multiple() {
+        let bytes = include_bytes!("../../../tests/fixtures/composed-multiple.wasm");
+        let graph = parse_component(bytes).expect("failed to parse composed-multiple.wasm");
+        assert!(
+            !graph.nodes.is_empty(),
+            "expected at least one component node"
         );
     }
 

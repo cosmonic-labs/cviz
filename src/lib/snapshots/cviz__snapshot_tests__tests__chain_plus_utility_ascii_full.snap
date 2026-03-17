@@ -1,0 +1,18 @@
+---
+source: src/lib/snapshot_tests.rs
+assertion_line: 152
+expression: "ascii_snap(&chain_plus_utility_graph(), DetailLevel::Full, false)"
+---
+┌───────────────────────────┐
+│       All Instances       │
+├───────────────────────────┤
+│  [srv] [comp:0]           │
+│  [middleware] [comp:1]    │
+│  [logger] [comp:2]        │
+└───────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│                      Connections                       │
+├────────────────────────────────────────────────────────┤
+│  [srv] ── wasi:http/handler@0.3.0 ──> [middleware]     │
+│  [middleware] ──> (Export: wasi:http/handler@0.3.0)    │
+└────────────────────────────────────────────────────────┘

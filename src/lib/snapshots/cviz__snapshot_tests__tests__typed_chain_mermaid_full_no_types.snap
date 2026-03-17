@@ -1,0 +1,15 @@
+---
+source: src/lib/snapshot_tests.rs
+assertion_line: 258
+expression: "mermaid_snap(&typed_chain_graph(), DetailLevel::Full, false)"
+---
+%%{init: {'flowchart': {'wrappingWidth': 600}}}%%
+graph LR
+    subgraph all["All Instances"]
+        srv["srv [comp:0]"]
+        middleware["middleware [comp:1]"]
+    end
+
+    srv -->|"wasi:http/handler@0.3.0"| middleware
+
+    middleware --> export_wasi_http_handler_0_3_0(["Export: wasi:http/handler@0.3.0"])

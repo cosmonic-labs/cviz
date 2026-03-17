@@ -1,0 +1,26 @@
+---
+source: src/lib/snapshot_tests.rs
+assertion_line: 143
+expression: "ascii_snap(&chain_plus_utility_graph(), DetailLevel::AllInterfaces, false)"
+---
+┌──────────────────┐
+│   Host Imports   │
+├──────────────────┤
+│  {handler}       │
+│  {log}           │
+└──────────────────┘
+┌─────────────────────────┐
+│   Component Instances   │
+├─────────────────────────┤
+│  [srv]                  │
+│  [middleware]           │
+│  [logger]               │
+└─────────────────────────┘
+┌────────────────────────────────────────┐
+│              Connections               │
+├────────────────────────────────────────┤
+│  {handler} --- handler --- [srv]       │
+│  [srv] ── handler ──> [middleware]     │
+│  {log} --- log --- [logger]            │
+│  [middleware] ──> (Export: handler)    │
+└────────────────────────────────────────┘
