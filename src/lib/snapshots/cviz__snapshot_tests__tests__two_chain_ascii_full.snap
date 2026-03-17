@@ -1,0 +1,21 @@
+---
+source: src/lib/snapshot_tests.rs
+assertion_line: 76
+expression: "ascii_snap(&two_chain_graph(), DetailLevel::Full, false)"
+---
+┌─────────────────────────┐
+│      All Instances      │
+├─────────────────────────┤
+│  [srv-http] [comp:0]    │
+│  [mw-http] [comp:1]     │
+│  [db] [comp:2]          │
+│  [cache] [comp:3]       │
+└─────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                       Connections                       │
+├─────────────────────────────────────────────────────────┤
+│  [srv-http] ── wasi:http/handler@0.3.0 ──> [mw-http]    │
+│  [db] ── wasi:keyvalue/store@0.1.0 ──> [cache]          │
+│  [mw-http] ──> (Export: wasi:http/handler@0.3.0)        │
+│  [cache] ──> (Export: wasi:keyvalue/store@0.1.0)        │
+└─────────────────────────────────────────────────────────┘

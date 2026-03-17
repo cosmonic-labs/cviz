@@ -1,0 +1,14 @@
+---
+source: src/lib/snapshot_tests.rs
+assertion_line: 222
+expression: "mermaid_snap(&typed_chain_graph(), DetailLevel::HandlerChain, false)"
+---
+%%{init: {'flowchart': {'wrappingWidth': 600}}}%%
+graph LR
+    subgraph composition["Service Chains"]
+        middleware["middleware"]
+        srv["srv"]
+    end
+
+    export_wasi_http_handler_0_3_0(["Export: handler"]) --> middleware
+    middleware -->|"handler"| srv

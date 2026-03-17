@@ -1,0 +1,14 @@
+---
+source: src/lib/snapshot_tests.rs
+assertion_line: 66
+expression: "ascii_snap(&two_chain_graph(), DetailLevel::HandlerChain, false)"
+---
+┌───────────────────────────────────┐
+│          Service Chains           │
+├───────────────────────────────────┤
+│[Export: handler] ──> mw-http      │
+│mw-http ── handler ──> srv-http    │
+│                                   │
+│[Export: store] ──> cache          │
+│cache ── store ──> db              │
+└───────────────────────────────────┘

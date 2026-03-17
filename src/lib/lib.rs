@@ -6,6 +6,8 @@ pub mod output;
 pub mod parse;
 #[cfg(test)]
 pub(crate) mod test_utils;
+#[cfg(test)]
+mod snapshot_tests;
 
 /// Check if this is the connection for a specific interface
 pub fn is_connection_for(conn: &InterfaceConnection, interface_name: &str) -> bool {

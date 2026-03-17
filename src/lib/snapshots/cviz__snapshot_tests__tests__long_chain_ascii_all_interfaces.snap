@@ -1,0 +1,25 @@
+---
+source: src/lib/snapshot_tests.rs
+assertion_line: 105
+expression: "ascii_snap(&long_chain_graph(), DetailLevel::AllInterfaces, false)"
+---
+┌──────────────────┐
+│   Host Imports   │
+├──────────────────┤
+│  {consumer}      │
+└──────────────────┘
+┌─────────────────────────┐
+│   Component Instances   │
+├─────────────────────────┤
+│  [backend]              │
+│  [service]              │
+│  [gateway]              │
+└─────────────────────────┘
+┌───────────────────────────────────────────┐
+│                Connections                │
+├───────────────────────────────────────────┤
+│  {consumer} --- consumer --- [backend]    │
+│  [backend] ── consumer ──> [service]      │
+│  [service] ── consumer ──> [gateway]      │
+│  [gateway] ──> (Export: consumer)         │
+└───────────────────────────────────────────┘

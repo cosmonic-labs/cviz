@@ -1,0 +1,17 @@
+---
+source: src/lib/snapshot_tests.rs
+assertion_line: 125
+expression: "mermaid_snap(&long_chain_graph(), DetailLevel::Full, false)"
+---
+%%{init: {'flowchart': {'wrappingWidth': 600}}}%%
+graph LR
+    subgraph all["All Instances"]
+        backend["backend [comp:0]"]
+        service["service [comp:1]"]
+        gateway["gateway [comp:2]"]
+    end
+
+    backend -->|"wasi:messaging/consumer@0.2.0"| service
+    service -->|"wasi:messaging/consumer@0.2.0"| gateway
+
+    gateway --> export_wasi_messaging_consumer_0_2_0(["Export: wasi:messaging/consumer@0.2.0"])

@@ -30,3 +30,4 @@ hex = "0.4"
 
 [dev-dependencies]
 wat = "1"
+insta = "1"
