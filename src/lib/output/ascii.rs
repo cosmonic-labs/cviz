@@ -248,7 +248,17 @@ fn box_content(title: &str, lines: &[impl AsRef<str>]) -> String {
 mod tests {
     use super::*;
     use crate::model::{ComponentNode, FuncSignature, InstanceInterface, InterfaceConnection, InterfaceType, ValueType};
+    use crate::test_utils::*;
     use std::collections::BTreeMap;
+
+    /// Return the 0-based line index of the first line containing `needle`.
+    /// Panics with a clear message if not found.
+    fn line_pos(output: &str, needle: &str) -> usize {
+        output
+            .lines()
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("'{}' not found in output:\n{}", needle, output))
+    }
 
     /// Build a graph: host → $srv → $middleware → export(handler)
     fn test_graph() -> CompositionGraph {
@@ -424,5 +434,260 @@ mod tests {
 
         // Type lines should not appear when show_types=false
         assert!(!output.contains("`handle`: (u32) -> bool"), "should not show signatures when types disabled");
+    }
+
+    // -----------------------------------------------------------------------
+    // Ordering / request-flow order
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_chain_request_flow_order() {
+        let graph = simple_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::HandlerChain, false);
+        // Export entry point must appear before the middleware→srv edge
+        let export_pos = line_pos(&output, "[Export: handler] ──>");
+        let edge_pos = line_pos(&output, "middleware ──handler──> srv");
+        assert!(export_pos < edge_pos, "export entry should precede chain edge");
+    }
+
+    #[test]
+    fn test_long_chain_order() {
+        let graph = long_chain_graph(); // messaging/consumer: gateway → service → backend
+        let output = generate_ascii(&graph, DetailLevel::HandlerChain, false);
+        let export_pos = line_pos(&output, "[Export: consumer] ──>");
+        let first_edge_pos = line_pos(&output, "gateway ──consumer──> service");
+        let second_edge_pos = line_pos(&output, "service ──consumer──> backend");
+        assert!(export_pos < first_edge_pos, "export should precede gateway→service");
+        assert!(first_edge_pos < second_edge_pos, "gateway→service should precede service→backend");
+    }
+
+    // -----------------------------------------------------------------------
+    // Multiple chains
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_two_chains_ascii() {
+        let graph = two_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::HandlerChain, false);
+        assert!(output.contains("[Export: handler]"), "should show http handler export");
+        assert!(output.contains("[Export: store]"), "should show keyvalue store export");
+    }
+
+    #[test]
+    fn test_two_chains_both_edges() {
+        let graph = two_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::HandlerChain, false);
+        assert!(
+            output.contains("mw-http ──handler──> srv-http"),
+            "should show http handler chain edge, got:\n{}", output
+        );
+        assert!(
+            output.contains("cache ──store──> db"),
+            "should show keyvalue chain edge, got:\n{}", output
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Utility node isolation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_utility_node_absent_in_handler_chain() {
+        let graph = chain_plus_utility_graph();
+        let chain_out = generate_ascii(&graph, DetailLevel::HandlerChain, false);
+        assert!(!chain_out.contains("logger"), "utility node should not appear in HandlerChain output");
+
+        let all_out = generate_ascii(&graph, DetailLevel::AllInterfaces, false);
+        assert!(all_out.contains("logger"), "utility node should appear in AllInterfaces output");
+    }
+
+    // -----------------------------------------------------------------------
+    // Long (3-node) chain
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_long_chain_ascii() {
+        let graph = long_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::HandlerChain, false);
+        assert!(output.contains("gateway"), "should show gateway node");
+        assert!(output.contains("service"), "should show service node");
+        assert!(output.contains("backend"), "should show backend node");
+        assert!(output.contains("gateway ──consumer──> service"), "should show first hop");
+        assert!(output.contains("service ──consumer──> backend"), "should show second hop");
+    }
+
+    // -----------------------------------------------------------------------
+    // HandlerChain type symbols / key
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_handler_chain_types_key_appears() {
+        let graph = typed_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::HandlerChain, true);
+        // The key section is separated from the chain by a blank line and
+        // contains a symbol followed by the function signature.
+        assert!(output.contains("`handle`: (u32) -> bool"), "key should contain function signature");
+    }
+
+    #[test]
+    fn test_handler_chain_types_symbol_in_export() {
+        let graph = typed_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::HandlerChain, true);
+        // The export label should have a symbol appended, making it longer than just "[Export: handler]"
+        let export_line = output.lines().find(|l| l.contains("[Export: handler")).unwrap_or_else(|| {
+            panic!("no export line found in:\n{}", output)
+        });
+        assert!(
+            export_line.len() > "[Export: handler]".len() + 5,
+            "export label should include a type symbol, got: {}", export_line
+        );
+    }
+
+    #[test]
+    fn test_handler_chain_types_key_content() {
+        let graph = typed_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::HandlerChain, true);
+        // Key line format: "<symbol> `handle`: (u32) -> bool"
+        let key_line = output
+            .lines()
+            .find(|l| l.contains("`handle`"))
+            .unwrap_or_else(|| panic!("no key line found in:\n{}", output));
+        assert!(key_line.contains("(u32) -> bool"), "key line should contain full signature");
+    }
+
+    #[test]
+    fn test_two_typed_chains_distinct_symbols() {
+        let graph = two_typed_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::HandlerChain, true);
+        // Two distinct interface types → two key entries
+        let key_lines: Vec<&str> = output.lines().filter(|l| l.contains("->")).collect();
+        assert!(key_lines.len() >= 2, "should have two key entries for two distinct types, got:\n{}", output);
+        // The two key lines should have different symbols (first char differs)
+        let symbols: Vec<&str> = key_lines.iter().map(|l| l.split_whitespace().next().unwrap_or("")).collect();
+        assert_ne!(symbols[0], symbols[1], "distinct types should get distinct symbols");
+    }
+
+    #[test]
+    fn test_same_type_same_symbol() {
+        // typed_chain_graph has the same interface type on the export and the
+        // inter-component connection. Both should get the same symbol → only
+        // one key entry.
+        let graph = typed_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::HandlerChain, true);
+        let sig = "`handle`: (u32) -> bool";
+        let occurrences = output.matches(sig).count();
+        assert_eq!(occurrences, 1, "same type fingerprint should produce exactly one key entry");
+    }
+
+    // -----------------------------------------------------------------------
+    // AllInterfaces exact edge / section format
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_all_interfaces_host_edge_format() {
+        let graph = simple_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::AllInterfaces, false);
+        // Host import edges use dashed style with braces for the interface name.
+        // $srv imports handler directly from the host.
+        assert!(
+            output.contains("{handler} -.handler.- [srv]"),
+            "host edge should use dashed format, got:\n{}", output
+        );
+    }
+
+    #[test]
+    fn test_all_interfaces_component_edge_format() {
+        let graph = simple_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::AllInterfaces, false);
+        assert!(
+            output.contains("[srv] ──handler──> [middleware]"),
+            "component edge should use solid arrow format, got:\n{}", output
+        );
+    }
+
+    #[test]
+    fn test_all_interfaces_export_format() {
+        let graph = simple_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::AllInterfaces, false);
+        assert!(
+            output.contains("[middleware] ──> (Export: handler)"),
+            "export line should use expected format, got:\n{}", output
+        );
+    }
+
+    #[test]
+    fn test_all_interfaces_type_lines_on_export() {
+        // Type lines should appear *below the export line*, not just somewhere in the output.
+        let graph = typed_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::AllInterfaces, true);
+        let export_pos = line_pos(&output, "──> (Export: handler)");
+        let sig_after_export = output
+            .lines()
+            .skip(export_pos + 1)
+            .any(|l| l.contains("`handle`: (u32) -> bool"));
+        assert!(sig_after_export, "type signature should appear after the export line, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_all_interfaces_two_chains() {
+        let graph = two_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::AllInterfaces, false);
+        // All 4 nodes in Component Instances
+        assert!(output.contains("srv-http"), "should show srv-http");
+        assert!(output.contains("mw-http"), "should show mw-http");
+        assert!(output.contains("db"), "should show db");
+        assert!(output.contains("cache"), "should show cache");
+        // Both chain edges
+        assert!(output.contains("[srv-http] ──handler──> [mw-http]"), "should show handler edge");
+        assert!(output.contains("[db] ──store──> [cache]"), "should show store edge");
+        // Both exports
+        assert!(output.contains("(Export: handler)"), "should show handler export");
+        assert!(output.contains("(Export: store)"), "should show store export");
+    }
+
+    #[test]
+    fn test_full_synthetic_node_visible() {
+        use crate::model::{ComponentNode, SYNTHETIC_COMPONENT};
+        let mut graph = CompositionGraph::new();
+        let real = ComponentNode::new("$real".to_string(), 0, 0);
+        graph.add_node(1, real);
+        let synthetic = ComponentNode::new("$synth".to_string(), SYNTHETIC_COMPONENT, SYNTHETIC_COMPONENT);
+        graph.add_node(99, synthetic);
+
+        let output = generate_ascii(&graph, DetailLevel::Full, false);
+        assert!(output.contains("synth"), "synthetic node should appear in Full output");
+        assert!(output.contains("(synthetic)"), "synthetic node should be labelled as synthetic");
+    }
+
+    #[test]
+    fn test_handler_chain_no_key_when_types_disabled() {
+        let graph = typed_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::HandlerChain, false);
+        // No symbol from the pool should appear, and no function signature
+        assert!(!output.contains("`handle`"), "no key when show_types=false");
+        assert!(!output.contains("(u32) -> bool"), "no sig when show_types=false");
+    }
+
+    #[test]
+    fn test_handler_chain_key_after_chain_content() {
+        let graph = typed_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::HandlerChain, true);
+        // When show_types=true the edge label gets a symbol appended (e.g. "──handler✦──> srv"),
+        // so search for the portion that is always present regardless of symbol.
+        let chain_edge_pos = line_pos(&output, "──> srv");
+        let key_pos = line_pos(&output, "`handle`: (u32) -> bool");
+        assert!(key_pos > chain_edge_pos, "key should appear after chain edges");
+    }
+
+    #[test]
+    fn test_two_chains_blank_line_separator() {
+        let graph = two_chain_graph();
+        let output = generate_ascii(&graph, DetailLevel::HandlerChain, false);
+        // Inside a box, a blank separator line is rendered as "│<spaces>│" —
+        // every character is either '│' or ' '.
+        let has_separator = output
+            .lines()
+            .any(|l| l.contains('│') && l.chars().all(|c| c == '│' || c == ' '));
+        assert!(has_separator, "blank separator line should exist between two chains, got:\n{}", output);
     }
 }

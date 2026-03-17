@@ -235,6 +235,7 @@ mod tests {
     use super::*;
     use crate::model::{ComponentNode, FuncSignature, InstanceInterface, InterfaceConnection, InterfaceType, ValueType};
     use crate::output::Direction;
+    use crate::test_utils::*;
     use std::collections::BTreeMap;
 
     /// Build a graph: host → $srv → $middleware → export(handler)
@@ -427,5 +428,162 @@ mod tests {
         assert_eq!(sanitize_for_mermaid("$srv"), "srv");
         assert_eq!(sanitize_for_mermaid("mdl-a"), "mdl_a");
         assert_eq!(sanitize_for_mermaid("instance_0"), "instance_0");
+    }
+
+    // -----------------------------------------------------------------------
+    // Multiple chains
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_two_chains_mermaid() {
+        let graph = two_chain_graph();
+        let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, false);
+        assert!(output.contains("Export: handler"), "should show http handler export");
+        assert!(output.contains("Export: store"), "should show keyvalue store export");
+    }
+
+    #[test]
+    fn test_two_chains_subgraph_nodes() {
+        let graph = two_chain_graph();
+        let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, false);
+        // All four chain nodes should appear inside the composition subgraph
+        assert!(output.contains("srv_http"), "should have srv-http node");
+        assert!(output.contains("mw_http"), "should have mw-http node");
+        assert!(output.contains("db"), "should have db node");
+        assert!(output.contains("cache"), "should have cache node");
+    }
+
+    #[test]
+    fn test_two_chains_edges_mermaid() {
+        let graph = two_chain_graph();
+        let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, false);
+        assert!(output.contains("-->|\"handler\"|"), "should have handler edge");
+        assert!(output.contains("-->|\"store\"|"), "should have store edge");
+    }
+
+    // -----------------------------------------------------------------------
+    // Utility node isolation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_utility_node_absent_in_handler_chain_mermaid() {
+        let graph = chain_plus_utility_graph();
+        let chain_out = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, false);
+        assert!(!chain_out.contains("logger"), "utility node should not appear in HandlerChain output");
+
+        let all_out = generate_mermaid(&graph, DetailLevel::AllInterfaces, Direction::LeftToRight, false);
+        assert!(all_out.contains("logger"), "utility node should appear in AllInterfaces output");
+    }
+
+    // -----------------------------------------------------------------------
+    // Long (3-node) chain
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_long_chain_mermaid() {
+        let graph = long_chain_graph(); // messaging/consumer
+        let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, false);
+        assert!(output.contains("gateway"), "should show gateway node");
+        assert!(output.contains("service"), "should show service node");
+        assert!(output.contains("backend"), "should show backend node");
+        // Two inter-node edges for consumer
+        assert_eq!(
+            output.matches("-->|\"consumer\"|").count(), 2,
+            "should have two consumer edges for 3-node chain"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // HandlerChain type symbols / key subgraph
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_handler_chain_types_key_subgraph_mermaid() {
+        let graph = typed_chain_graph();
+        let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, true);
+        assert!(output.contains("subgraph key"), "should have key subgraph when show_types=true");
+    }
+
+    #[test]
+    fn test_handler_chain_types_key_content_mermaid() {
+        let graph = typed_chain_graph();
+        let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, true);
+        assert!(output.contains("`handle`: (u32) -> bool"), "key subgraph should contain function signature");
+    }
+
+    #[test]
+    fn test_two_typed_chains_distinct_symbols_mermaid() {
+        let graph = two_typed_chain_graph();
+        let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, true);
+        // Two distinct types → two key node entries (k0 and k1)
+        assert!(output.contains("k0["), "should have first key entry");
+        assert!(output.contains("k1["), "should have second key entry");
+    }
+
+    // -----------------------------------------------------------------------
+    // AllInterfaces exact structure
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_all_interfaces_host_node_shape() {
+        let graph = simple_chain_graph();
+        let output = generate_mermaid(&graph, DetailLevel::AllInterfaces, Direction::LeftToRight, false);
+        // Host interfaces use [] shape (not diamond) since we switched in the refactor
+        assert!(output.contains("subgraph host"), "should have host subgraph");
+        assert!(output.contains("handler"), "should show handler host interface");
+    }
+
+    #[test]
+    fn test_all_interfaces_dashed_edge_present() {
+        let graph = simple_chain_graph();
+        let output = generate_mermaid(&graph, DetailLevel::AllInterfaces, Direction::LeftToRight, false);
+        assert!(output.contains("-.->\"|\"handler\"|") || output.contains("-.->|\"handler\"|"),
+            "should have dashed edge for host handler import, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_all_interfaces_export_node() {
+        let graph = simple_chain_graph();
+        let output = generate_mermaid(&graph, DetailLevel::AllInterfaces, Direction::LeftToRight, false);
+        // Export uses stadium shape ([" ... "])
+        assert!(output.contains("([\"Export: handler\"])"), "should have export stadium node, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_handler_chain_no_key_subgraph_when_types_disabled() {
+        let graph = typed_chain_graph();
+        let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, false);
+        assert!(!output.contains("subgraph key"), "no key subgraph when show_types=false");
+    }
+
+    #[test]
+    fn test_all_interfaces_two_chains_mermaid() {
+        let graph = two_chain_graph();
+        let output = generate_mermaid(&graph, DetailLevel::AllInterfaces, Direction::LeftToRight, false);
+        // All 4 nodes in composition subgraph
+        assert!(output.contains("srv_http"), "should have srv-http node");
+        assert!(output.contains("mw_http"), "should have mw-http node");
+        assert!(output.contains("db"), "should have db node");
+        assert!(output.contains("cache"), "should have cache node");
+        // Both exports
+        assert!(output.contains("Export: handler"), "should have handler export");
+        assert!(output.contains("Export: store"), "should have store export");
+        // Both dashed host edges
+        assert_eq!(output.matches("-.->\"|\"handler\"|").count() + output.matches("-.->|\"handler\"|").count(), 1,
+            "should have one dashed handler edge");
+    }
+
+    #[test]
+    fn test_full_synthetic_node_visible_mermaid() {
+        use crate::model::{ComponentNode, SYNTHETIC_COMPONENT};
+        let mut graph = CompositionGraph::new();
+        let real = ComponentNode::new("$real".to_string(), 0, 0);
+        graph.add_node(1, real);
+        let synthetic = ComponentNode::new("$synth".to_string(), SYNTHETIC_COMPONENT, SYNTHETIC_COMPONENT);
+        graph.add_node(99, synthetic);
+
+        let output = generate_mermaid(&graph, DetailLevel::Full, Direction::LeftToRight, false);
+        assert!(output.contains("synth"), "synthetic node should appear in Full output");
+        assert!(output.contains("(synthetic)"), "synthetic node should be labelled as synthetic");
     }
 }

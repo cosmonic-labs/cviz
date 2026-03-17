@@ -480,4 +480,270 @@ mod tests {
         let unique: std::collections::HashSet<&String> = symbols.iter().collect();
         assert_eq!(symbols.len(), unique.len(), "symbol_at produced duplicates");
     }
+
+    // -----------------------------------------------------------------------
+    // format_func_sig edge cases
+    // -----------------------------------------------------------------------
+
+    use crate::model::{FuncSignature, InterfaceType, InstanceInterface, ValueType};
+    use std::collections::BTreeMap;
+
+    fn make_arena() -> crate::model::TypeArena {
+        crate::model::TypeArena::default()
+    }
+
+    #[test]
+    fn test_format_func_sig_no_params() {
+        let mut arena = make_arena();
+        let bool_id = arena.intern_val(ValueType::Bool);
+        let sig = FuncSignature { params: vec![], results: vec![bool_id] };
+        assert_eq!(format_func_sig(&sig, &arena), "() -> bool");
+    }
+
+    #[test]
+    fn test_format_func_sig_no_results() {
+        let mut arena = make_arena();
+        let u32_id = arena.intern_val(ValueType::U32);
+        let sig = FuncSignature { params: vec![u32_id], results: vec![] };
+        assert_eq!(format_func_sig(&sig, &arena), "(u32) -> ()");
+    }
+
+    #[test]
+    fn test_format_func_sig_multiple_results() {
+        let mut arena = make_arena();
+        let u32_id = arena.intern_val(ValueType::U32);
+        let str_id = arena.intern_val(ValueType::String);
+        let bool_id = arena.intern_val(ValueType::Bool);
+        let sig = FuncSignature { params: vec![u32_id, str_id], results: vec![bool_id, str_id] };
+        assert_eq!(format_func_sig(&sig, &arena), "(u32, string) -> (bool, string)");
+    }
+
+    #[test]
+    fn test_format_interface_type_lines_func_variant() {
+        let mut arena = make_arena();
+        let u32_id = arena.intern_val(ValueType::U32);
+        let bool_id = arena.intern_val(ValueType::Bool);
+        let sig = FuncSignature { params: vec![u32_id], results: vec![bool_id] };
+        // Func variant: single bare sig line, no backtick-name prefix
+        let iface = InterfaceType::Func(sig);
+        let lines = format_interface_type_lines(&iface, &arena);
+        assert_eq!(lines, vec!["(u32) -> bool"]);
+    }
+
+    #[test]
+    fn test_connection_type_lines_missing_type_info() {
+        use crate::model::InterfaceConnection;
+        let arena = make_arena();
+        let conn = InterfaceConnection {
+            interface_name: "wasi:http/handler@0.3.0".to_string(),
+            source_instance: 0,
+            is_host_import: true,
+            interface_type: None, // no type info
+            fingerprint: None,
+        };
+        // show_types=true but no type info → should return empty, not panic
+        let lines = connection_type_lines(&conn, &arena, true);
+        assert!(lines.is_empty(), "missing type info should produce no type lines");
+    }
+
+    // -----------------------------------------------------------------------
+    // ConnectionsView IR tests
+    // -----------------------------------------------------------------------
+
+    use crate::test_utils::*;
+
+    #[test]
+    fn test_view_all_interfaces_node_count() {
+        let graph = simple_chain_graph();
+        let view = build_all_interfaces_view(&graph, false);
+        // $srv and $middleware are real; no synthetic nodes in this graph
+        assert_eq!(view.nodes.len(), 2);
+        assert!(view.nodes.iter().any(|n| n.display.contains("srv")));
+        assert!(view.nodes.iter().any(|n| n.display.contains("middleware")));
+    }
+
+    #[test]
+    fn test_view_all_interfaces_host_names() {
+        let graph = simple_chain_graph();
+        let view = build_all_interfaces_view(&graph, false);
+        // Two distinct host interfaces: handler (from srv) and log (from middleware)
+        assert_eq!(view.host_names.len(), 2);
+        assert!(view.host_names.iter().any(|n| n.contains("handler")));
+        assert!(view.host_names.iter().any(|n| n.contains("log")));
+    }
+
+    #[test]
+    fn test_view_all_interfaces_edge_dashed() {
+        let graph = simple_chain_graph();
+        let view = build_all_interfaces_view(&graph, false);
+        // 2 host-import edges (dashed) + 1 component edge (solid)
+        let dashed: Vec<_> = view.edges.iter().filter(|e| e.is_dashed).collect();
+        let solid: Vec<_> = view.edges.iter().filter(|e| !e.is_dashed).collect();
+        assert_eq!(dashed.len(), 2, "two host imports should produce dashed edges");
+        assert_eq!(solid.len(), 1, "one inter-component import should produce a solid edge");
+    }
+
+    #[test]
+    fn test_view_all_interfaces_edge_endpoints() {
+        let graph = simple_chain_graph();
+        let view = build_all_interfaces_view(&graph, false);
+        let solid = view.edges.iter().find(|e| !e.is_dashed).unwrap();
+        assert!(solid.from_display.contains("srv"), "solid edge should come from srv");
+        assert!(solid.to_display.contains("middleware"), "solid edge should go to middleware");
+        assert_eq!(solid.label, "handler", "edge label should be short interface name");
+    }
+
+    #[test]
+    fn test_view_all_interfaces_export() {
+        let graph = simple_chain_graph();
+        let view = build_all_interfaces_view(&graph, false);
+        assert_eq!(view.exports.len(), 1);
+        let exp = &view.exports[0];
+        assert!(exp.from_display.contains("middleware"));
+        assert_eq!(exp.short_name, "handler");
+        assert!(exp.full_name.contains("wasi:http/handler"));
+    }
+
+    #[test]
+    fn test_view_all_interfaces_non_http_chain() {
+        // Verify the IR works for a non-http chain (keyvalue/store)
+        let graph = two_chain_graph();
+        let view = build_all_interfaces_view(&graph, false);
+        let kv_export = view.exports.iter().find(|e| e.full_name.contains("keyvalue"));
+        assert!(kv_export.is_some(), "should have a keyvalue export");
+        assert_eq!(kv_export.unwrap().short_name, "store");
+
+        let kv_solid = view.edges.iter().find(|e| !e.is_dashed && e.label == "store");
+        assert!(kv_solid.is_some(), "should have solid keyvalue/store edge");
+        let kv_solid = kv_solid.unwrap();
+        assert!(kv_solid.from_display.contains("db"));
+        assert!(kv_solid.to_display.contains("cache"));
+    }
+
+    #[test]
+    fn test_view_all_interfaces_excludes_synthetic_source() {
+        // A synthetic node as the *source* of an import should not produce an
+        // edge in AllInterfaces mode (only real component sources are shown).
+        use crate::model::{ComponentNode, InterfaceConnection, SYNTHETIC_COMPONENT};
+
+        let mut graph = CompositionGraph::new();
+
+        // A real component that imports from a synthetic source
+        let mut real = ComponentNode::new("$real".to_string(), 0, 0);
+        real.add_import(InterfaceConnection {
+            interface_name: "wasi:http/handler@0.3.0".to_string(),
+            source_instance: 99, // will be a synthetic node
+            is_host_import: false,
+            interface_type: None,
+            fingerprint: None,
+        });
+        graph.add_node(1, real);
+
+        // The synthetic node at idx 99
+        let synthetic = ComponentNode::new("$synthetic".to_string(), SYNTHETIC_COMPONENT, SYNTHETIC_COMPONENT);
+        graph.add_node(99, synthetic);
+
+        let view = build_all_interfaces_view(&graph, false);
+
+        // The edge from the synthetic source should be dropped
+        assert!(
+            view.edges.is_empty(),
+            "edges from synthetic source nodes should be excluded, got: {:?}",
+            view.edges.iter().map(|e| (&e.from_display, &e.to_display)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_view_full_includes_all_nodes() {
+        let graph = simple_chain_graph();
+        let view = build_full_view(&graph, false);
+        // Full includes all nodes; host_names is empty
+        assert!(view.nodes.len() >= 2);
+        assert!(view.host_names.is_empty(), "Full mode has no host node list");
+    }
+
+    #[test]
+    fn test_view_full_no_dashed_edges() {
+        let graph = simple_chain_graph();
+        let view = build_full_view(&graph, false);
+        assert!(
+            view.edges.iter().all(|e| !e.is_dashed),
+            "Full mode skips host imports so no edge should be dashed"
+        );
+    }
+
+    #[test]
+    fn test_view_full_edge_uses_full_name() {
+        let graph = simple_chain_graph();
+        let view = build_full_view(&graph, false);
+        let edge = view.edges.iter().find(|e| e.label.contains("handler")).unwrap();
+        assert!(
+            edge.label.contains("wasi:http/handler@0.3.0"),
+            "Full mode should use full interface name as label, got: {}",
+            edge.label
+        );
+    }
+
+    #[test]
+    fn test_view_all_interfaces_two_chains() {
+        let graph = two_chain_graph();
+        let view = build_all_interfaces_view(&graph, false);
+        // 4 real nodes: srv-http, mw-http, db, cache
+        assert_eq!(view.nodes.len(), 4);
+        // 2 solid edges (one per chain) + 2 host-import edges (one per inner node)
+        let solid: Vec<_> = view.edges.iter().filter(|e| !e.is_dashed).collect();
+        assert_eq!(solid.len(), 2, "two inter-component edges expected");
+        // 2 exports
+        assert_eq!(view.exports.len(), 2);
+        let names: Vec<&str> = view.exports.iter().map(|e| e.short_name.as_str()).collect();
+        assert!(names.contains(&"handler"), "should have handler export");
+        assert!(names.contains(&"store"), "should have store export");
+    }
+
+    #[test]
+    fn test_view_full_synthetic_node_included() {
+        use crate::model::{ComponentNode, InterfaceConnection, SYNTHETIC_COMPONENT};
+        let mut graph = CompositionGraph::new();
+
+        let real = ComponentNode::new("$real".to_string(), 0, 0);
+        graph.add_node(1, real);
+        let synthetic = ComponentNode::new("$synth".to_string(), SYNTHETIC_COMPONENT, SYNTHETIC_COMPONENT);
+        graph.add_node(99, synthetic);
+
+        let view = build_full_view(&graph, false);
+        assert_eq!(view.nodes.len(), 2, "Full mode should include synthetic nodes");
+        assert!(view.nodes.iter().any(|n| n.is_synthetic), "synthetic flag should be set");
+        assert!(view.nodes.iter().any(|n| n.display.contains("synth")));
+    }
+
+    #[test]
+    fn test_view_host_interfaces_deduplicated() {
+        use crate::model::{ComponentNode, InterfaceConnection};
+        let mut graph = CompositionGraph::new();
+
+        // Two real nodes both importing the same host interface
+        let mut a = ComponentNode::new("$a".to_string(), 0, 0);
+        a.add_import(InterfaceConnection {
+            interface_name: "wasi:logging/log@0.1.0".to_string(),
+            source_instance: 0,
+            is_host_import: true,
+            interface_type: None,
+            fingerprint: None,
+        });
+        graph.add_node(1, a);
+
+        let mut b = ComponentNode::new("$b".to_string(), 1, 1);
+        b.add_import(InterfaceConnection {
+            interface_name: "wasi:logging/log@0.1.0".to_string(),
+            source_instance: 0,
+            is_host_import: true,
+            interface_type: None,
+            fingerprint: None,
+        });
+        graph.add_node(2, b);
+
+        let view = build_all_interfaces_view(&graph, false);
+        assert_eq!(view.host_names.len(), 1, "same host interface imported by two nodes should appear once");
+        assert_eq!(view.host_names[0], "wasi:logging/log@0.1.0");
+    }
 }
