@@ -537,7 +537,9 @@ impl TypeArena {
 impl TypeArena {
     pub fn canonical_val(&self, id: ValueTypeId) -> String {
         match self.lookup_val(id) {
-            ValueType::Map(k, v) => format!("map<{},{}>", self.canonical_val(*k), self.canonical_val(*v)),
+            ValueType::Map(k, v) => {
+                format!("map<{},{}>", self.canonical_val(*k), self.canonical_val(*v))
+            }
 
             ValueType::FixedSizeList(t, n) => format!("array{}<{}>", n, self.canonical_val(*t)),
 

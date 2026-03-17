@@ -22,13 +22,17 @@ pub fn is_connection_for(conn: &InterfaceConnection, interface_name: &str) -> bo
 /// This captures the middleware pattern generically, without assuming any
 /// specific interface name.
 pub fn find_chain_interfaces(graph: &CompositionGraph) -> Vec<String> {
-    let inter_component: HashSet<&str> = graph.nodes.values()
+    let inter_component: HashSet<&str> = graph
+        .nodes
+        .values()
         .flat_map(|n| n.imports.iter())
         .filter(|c| !c.is_host_import)
         .map(|c| c.interface_name.as_str())
         .collect();
 
-    graph.component_exports.keys()
+    graph
+        .component_exports
+        .keys()
         .filter(|name| inter_component.contains(name.as_str()))
         .cloned()
         .collect()
@@ -92,8 +96,14 @@ mod tests {
         let mut chains = find_chain_interfaces(&graph);
         chains.sort();
         assert_eq!(chains.len(), 2, "should find exactly two chain interfaces");
-        assert!(chains.iter().any(|c| c.contains("handler")), "should find http handler chain");
-        assert!(chains.iter().any(|c| c.contains("store")), "should find keyvalue store chain");
+        assert!(
+            chains.iter().any(|c| c.contains("handler")),
+            "should find http handler chain"
+        );
+        assert!(
+            chains.iter().any(|c| c.contains("store")),
+            "should find keyvalue store chain"
+        );
     }
 
     #[test]
@@ -110,7 +120,11 @@ mod tests {
         let graph = simple_chain_graph();
         let chain = get_chain_for(&graph, "wasi:http/handler@0.3.0");
         // Request-flow order: middleware(2) → srv(1)
-        assert_eq!(chain, vec![2, 1], "http handler chain should walk middleware → srv");
+        assert_eq!(
+            chain,
+            vec![2, 1],
+            "http handler chain should walk middleware → srv"
+        );
     }
 
     #[test]
@@ -119,7 +133,11 @@ mod tests {
         let graph = long_chain_graph();
         let chain = get_chain_for(&graph, "wasi:messaging/consumer@0.2.0");
         // Request-flow order: gateway(3) → service(2) → backend(1)
-        assert_eq!(chain, vec![3, 2, 1], "messaging chain should be in request-flow order (outermost first)");
+        assert_eq!(
+            chain,
+            vec![3, 2, 1],
+            "messaging chain should be in request-flow order (outermost first)"
+        );
     }
 
     // Verify that chain walking works for a non-http interface (keyvalue/store).
@@ -152,14 +170,20 @@ mod tests {
         graph.add_export("wasi:http/handler@0.3.0".to_string(), 1, None);
 
         let chains = find_chain_interfaces(&graph);
-        assert!(chains.is_empty(), "export with no inter-component importers should not be a chain");
+        assert!(
+            chains.is_empty(),
+            "export with no inter-component importers should not be a chain"
+        );
     }
 
     #[test]
     fn test_get_chain_for_unknown_interface() {
         let graph = simple_chain_graph();
         let chain = get_chain_for(&graph, "does:not/exist@0.0.0");
-        assert!(chain.is_empty(), "unknown interface should return empty chain");
+        assert!(
+            chain.is_empty(),
+            "unknown interface should return empty chain"
+        );
     }
 
     #[test]

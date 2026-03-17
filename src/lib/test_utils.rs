@@ -228,7 +228,10 @@ pub(crate) fn typed_chain_graph() -> CompositionGraph {
     let u32_id = graph.arena.intern_val(ValueType::U32);
     let bool_id = graph.arena.intern_val(ValueType::Bool);
 
-    let handle_sig = FuncSignature { params: vec![u32_id], results: vec![bool_id] };
+    let handle_sig = FuncSignature {
+        params: vec![u32_id],
+        results: vec![bool_id],
+    };
     let mut fns = BTreeMap::new();
     fns.insert("handle".to_string(), handle_sig);
     let iface_type = InterfaceType::Instance(InstanceInterface { functions: fns });
@@ -268,14 +271,22 @@ pub(crate) fn two_typed_chain_graph() -> CompositionGraph {
     // handler type: handle(u32) -> bool
     let u32_id = graph.arena.intern_val(ValueType::U32);
     let bool_id = graph.arena.intern_val(ValueType::Bool);
-    let handler_sig = FuncSignature { params: vec![u32_id], results: vec![bool_id] };
+    let handler_sig = FuncSignature {
+        params: vec![u32_id],
+        results: vec![bool_id],
+    };
     let mut handler_fns = BTreeMap::new();
     handler_fns.insert("handle".to_string(), handler_sig);
-    let handler_type = InterfaceType::Instance(InstanceInterface { functions: handler_fns });
+    let handler_type = InterfaceType::Instance(InstanceInterface {
+        functions: handler_fns,
+    });
 
     // keyvalue type: get(string) -> string
     let str_id = graph.arena.intern_val(ValueType::String);
-    let get_sig = FuncSignature { params: vec![str_id], results: vec![str_id] };
+    let get_sig = FuncSignature {
+        params: vec![str_id],
+        results: vec![str_id],
+    };
     let mut kv_fns = BTreeMap::new();
     kv_fns.insert("get".to_string(), get_sig);
     let kv_type = InterfaceType::Instance(InstanceInterface { functions: kv_fns });

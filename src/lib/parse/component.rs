@@ -1,4 +1,7 @@
-use crate::model::{ComponentNode, CompositionGraph, FuncSignature, InstanceInterface, InterfaceConnection, InterfaceType, TypeArena, ValueType, ValueTypeId};
+use crate::model::{
+    ComponentNode, CompositionGraph, FuncSignature, InstanceInterface, InterfaceConnection,
+    InterfaceType, TypeArena, ValueType, ValueTypeId,
+};
 use anyhow::Result;
 use std::collections::HashMap;
 use wirm::ir::component::refs::{GetCompRefs, GetItemRef};
@@ -8,7 +11,7 @@ use wirm::ir::component::visitor::{
 use wirm::wasmparser::{
     ComponentAlias, ComponentExport, ComponentInstance, ComponentTypeRef, PrimitiveValType,
 };
-use wirm::{ConcreteFuncType, ConcreteType, ConcreteValType, Component};
+use wirm::{Component, ConcreteFuncType, ConcreteType, ConcreteValType};
 
 /// Parse a WebAssembly component file and extract its composition graph
 pub fn parse_component(buff: &[u8]) -> Result<CompositionGraph> {
@@ -206,11 +209,7 @@ fn concrete_to_func_sig(ft: ConcreteFuncType, arena: &mut TypeArena) -> FuncSign
         .into_iter()
         .map(|(_, ty)| intern(ty, arena))
         .collect();
-    let results = ft
-        .result
-        .map(|ty| intern(ty, arena))
-        .into_iter()
-        .collect();
+    let results = ft.result.map(|ty| intern(ty, arena)).into_iter().collect();
     FuncSignature { params, results }
 }
 
@@ -226,37 +225,28 @@ fn concrete_to_val_type(ty: ConcreteValType, arena: &mut TypeArena) -> ValueType
         ConcreteValType::Variant(cases) => ValueType::Variant(
             cases
                 .into_iter()
-                .map(|(name, ty)| {
-                    (
-                        name.to_string(),
-                        ty.map(|t| intern(*t, arena)),
-                    )
-                })
+                .map(|(name, ty)| (name.to_string(), ty.map(|t| intern(*t, arena))))
                 .collect(),
         ),
         ConcreteValType::List(ty) => ValueType::List(intern(*ty, arena)),
         ConcreteValType::FixedSizeList(ty, size) => {
             ValueType::FixedSizeList(intern(*ty, arena), size)
         }
-        ConcreteValType::Tuple(types) => ValueType::Tuple(
-            types
-                .into_iter()
-                .map(|ty| intern(ty, arena))
-                .collect(),
-        ),
-        ConcreteValType::Option(ty) => {
-            ValueType::Option(intern(*ty, arena))
+        ConcreteValType::Tuple(types) => {
+            ValueType::Tuple(types.into_iter().map(|ty| intern(ty, arena)).collect())
         }
+        ConcreteValType::Option(ty) => ValueType::Option(intern(*ty, arena)),
         ConcreteValType::Result { ok, err } => ValueType::Result {
             ok: ok.map(|t| intern(*t, arena)),
             err: err.map(|t| intern(*t, arena)),
         },
-        ConcreteValType::Flags(names) => ValueType::Flags(names.iter().map(|s| s.to_string()).collect()),
-        ConcreteValType::Enum(names) => ValueType::Enum(names.iter().map(|s| s.to_string()).collect()),
-        ConcreteValType::Map(key, val) => ValueType::Map(
-            intern(*key, arena),
-            intern(*val, arena),
-        ),
+        ConcreteValType::Flags(names) => {
+            ValueType::Flags(names.iter().map(|s| s.to_string()).collect())
+        }
+        ConcreteValType::Enum(names) => {
+            ValueType::Enum(names.iter().map(|s| s.to_string()).collect())
+        }
+        ConcreteValType::Map(key, val) => ValueType::Map(intern(*key, arena), intern(*val, arena)),
         ConcreteValType::Resource => ValueType::Resource,
         ConcreteValType::AsyncHandle => ValueType::AsyncHandle,
     }
@@ -455,7 +445,10 @@ mod tests {
     fn test_parse_composed_multiple() {
         let bytes = include_bytes!("../../../tests/fixtures/composed-multiple.wasm");
         let graph = parse_component(bytes).expect("failed to parse composed-multiple.wasm");
-        assert!(!graph.nodes.is_empty(), "expected at least one component node");
+        assert!(
+            !graph.nodes.is_empty(),
+            "expected at least one component node"
+        );
     }
 
     #[test]

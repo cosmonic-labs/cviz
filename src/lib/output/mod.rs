@@ -2,12 +2,23 @@ pub mod ascii;
 // pub mod json;
 pub mod mermaid;
 
-use crate::model::{short_interface_name, CompositionGraph, ExportInfo, FuncSignature, InterfaceConnection, InterfaceType, InternedId, TypeArena, SYNTHETIC_COMPONENT};
+use crate::model::{
+    short_interface_name, CompositionGraph, ExportInfo, FuncSignature, InterfaceConnection,
+    InterfaceType, InternedId, TypeArena, SYNTHETIC_COMPONENT,
+};
 
 /// Format a function signature as `(param-type, ...) -> result-type`.
 pub(crate) fn format_func_sig(sig: &FuncSignature, arena: &TypeArena) -> String {
-    let params: Vec<String> = sig.params.iter().map(|id| arena.canonical_val(*id)).collect();
-    let results: Vec<String> = sig.results.iter().map(|id| arena.canonical_val(*id)).collect();
+    let params: Vec<String> = sig
+        .params
+        .iter()
+        .map(|id| arena.canonical_val(*id))
+        .collect();
+    let results: Vec<String> = sig
+        .results
+        .iter()
+        .map(|id| arena.canonical_val(*id))
+        .collect();
     let result_str = match results.as_slice() {
         [] => "()".to_string(),
         [single] => single.clone(),
@@ -43,7 +54,9 @@ pub(crate) fn export_type_lines(
         return vec![];
     }
     match export_info.ty {
-        Some(InternedId::Interface(id)) => format_interface_type_lines(arena.lookup_interface(id), arena),
+        Some(InternedId::Interface(id)) => {
+            format_interface_type_lines(arena.lookup_interface(id), arena)
+        }
         _ => vec![],
     }
 }
@@ -64,8 +77,8 @@ pub(crate) fn format_interface_type_lines(iface: &InterfaceType, arena: &TypeAre
 }
 
 const SYMBOL_POOL: &[char] = &[
-    '✦', '✧', '◆', '◇', '★', '☆', '●', '○', '▲', '△',
-    '▼', '▽', '■', '□', '◉', '♦', '♠', '✱', '✴', '❖',
+    '✦', '✧', '◆', '◇', '★', '☆', '●', '○', '▲', '△', '▼', '▽', '■', '□', '◉', '♦', '♠', '✱', '✴',
+    '❖',
 ];
 
 /// Compute the symbol string for a given assignment index using base-N encoding
@@ -114,12 +127,18 @@ pub(crate) struct SymbolMap {
 
 impl SymbolMap {
     pub(crate) fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     /// Return (or assign) the symbol for a connection's interface type.
     /// Returns `None` if the connection carries no type info.
-    pub(crate) fn symbol_for_conn(&mut self, conn: &InterfaceConnection, arena: &TypeArena) -> Option<&str> {
+    pub(crate) fn symbol_for_conn(
+        &mut self,
+        conn: &InterfaceConnection,
+        arena: &TypeArena,
+    ) -> Option<&str> {
         let fp = conn.fingerprint.as_ref()?;
         let iface = conn.interface_type.as_ref()?;
         Some(self.get_or_insert(fp, iface, arena))
@@ -127,7 +146,11 @@ impl SymbolMap {
 
     /// Return (or assign) the symbol for an export's interface type.
     /// Returns `None` if the export carries no interface type.
-    pub(crate) fn symbol_for_export(&mut self, export_info: &ExportInfo, arena: &TypeArena) -> Option<&str> {
+    pub(crate) fn symbol_for_export(
+        &mut self,
+        export_info: &ExportInfo,
+        arena: &TypeArena,
+    ) -> Option<&str> {
         let fp = export_info.fingerprint.as_ref()?;
         let id = match export_info.ty {
             Some(InternedId::Interface(id)) => id,
@@ -151,11 +174,18 @@ impl SymbolMap {
     ///
     /// This is the primary entry point for AllInterfaces/Full renderers that
     /// receive type data from the [`DiagramEdge`]/[`DiagramExport`] IR.
-    pub(crate) fn assign(&mut self, show_types: bool, fingerprint: Option<&str>, type_lines: Vec<String>) -> String {
+    pub(crate) fn assign(
+        &mut self,
+        show_types: bool,
+        fingerprint: Option<&str>,
+        type_lines: Vec<String>,
+    ) -> String {
         if !show_types {
             return String::new();
         }
-        let Some(fp) = fingerprint else { return String::new() };
+        let Some(fp) = fingerprint else {
+            return String::new();
+        };
         if let Some(pos) = self.entries.iter().position(|(f, _, _)| f == fp) {
             return self.entries[pos].1.clone();
         }
@@ -241,7 +271,10 @@ pub(crate) struct ConnectionsView {
 /// Includes real (non-synthetic) component nodes, host-import edges (dashed),
 /// inter-component edges (solid), and exported interfaces.  Edge labels use
 /// the short interface name.
-pub(crate) fn build_all_interfaces_view(graph: &CompositionGraph, show_types: bool) -> ConnectionsView {
+pub(crate) fn build_all_interfaces_view(
+    graph: &CompositionGraph,
+    show_types: bool,
+) -> ConnectionsView {
     let component_nodes = graph.real_nodes();
 
     let nodes = component_nodes
@@ -301,7 +334,12 @@ pub(crate) fn build_all_interfaces_view(graph: &CompositionGraph, show_types: bo
         }
     }
 
-    ConnectionsView { host_names: graph.host_interfaces(), nodes, edges, exports }
+    ConnectionsView {
+        host_names: graph.host_interfaces(),
+        nodes,
+        edges,
+        exports,
+    }
 }
 
 /// Build a [`ConnectionsView`] for `Full` detail level.
@@ -354,7 +392,12 @@ pub(crate) fn build_full_view(graph: &CompositionGraph, show_types: bool) -> Con
         }
     }
 
-    ConnectionsView { host_names: vec![], nodes, edges, exports }
+    ConnectionsView {
+        host_names: vec![],
+        nodes,
+        edges,
+        exports,
+    }
 }
 
 /// Output format for visualization
@@ -514,8 +557,7 @@ mod tests {
     // format_func_sig edge cases
     // -----------------------------------------------------------------------
 
-    use crate::model::{FuncSignature, InterfaceType, InstanceInterface, ValueType};
-    use std::collections::BTreeMap;
+    use crate::model::{FuncSignature, InterfaceType, ValueType};
 
     fn make_arena() -> crate::model::TypeArena {
         crate::model::TypeArena::default()
@@ -525,7 +567,10 @@ mod tests {
     fn test_format_func_sig_no_params() {
         let mut arena = make_arena();
         let bool_id = arena.intern_val(ValueType::Bool);
-        let sig = FuncSignature { params: vec![], results: vec![bool_id] };
+        let sig = FuncSignature {
+            params: vec![],
+            results: vec![bool_id],
+        };
         assert_eq!(format_func_sig(&sig, &arena), "() -> bool");
     }
 
@@ -533,7 +578,10 @@ mod tests {
     fn test_format_func_sig_no_results() {
         let mut arena = make_arena();
         let u32_id = arena.intern_val(ValueType::U32);
-        let sig = FuncSignature { params: vec![u32_id], results: vec![] };
+        let sig = FuncSignature {
+            params: vec![u32_id],
+            results: vec![],
+        };
         assert_eq!(format_func_sig(&sig, &arena), "(u32) -> ()");
     }
 
@@ -543,8 +591,14 @@ mod tests {
         let u32_id = arena.intern_val(ValueType::U32);
         let str_id = arena.intern_val(ValueType::String);
         let bool_id = arena.intern_val(ValueType::Bool);
-        let sig = FuncSignature { params: vec![u32_id, str_id], results: vec![bool_id, str_id] };
-        assert_eq!(format_func_sig(&sig, &arena), "(u32, string) -> (bool, string)");
+        let sig = FuncSignature {
+            params: vec![u32_id, str_id],
+            results: vec![bool_id, str_id],
+        };
+        assert_eq!(
+            format_func_sig(&sig, &arena),
+            "(u32, string) -> (bool, string)"
+        );
     }
 
     #[test]
@@ -552,7 +606,10 @@ mod tests {
         let mut arena = make_arena();
         let u32_id = arena.intern_val(ValueType::U32);
         let bool_id = arena.intern_val(ValueType::Bool);
-        let sig = FuncSignature { params: vec![u32_id], results: vec![bool_id] };
+        let sig = FuncSignature {
+            params: vec![u32_id],
+            results: vec![bool_id],
+        };
         // Func variant: single bare sig line, no backtick-name prefix
         let iface = InterfaceType::Func(sig);
         let lines = format_interface_type_lines(&iface, &arena);
@@ -572,7 +629,10 @@ mod tests {
         };
         // show_types=true but no type info → should return empty, not panic
         let lines = connection_type_lines(&conn, &arena, true);
-        assert!(lines.is_empty(), "missing type info should produce no type lines");
+        assert!(
+            lines.is_empty(),
+            "missing type info should produce no type lines"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -608,8 +668,16 @@ mod tests {
         // 2 host-import edges (dashed) + 1 component edge (solid)
         let dashed: Vec<_> = view.edges.iter().filter(|e| e.is_dashed).collect();
         let solid: Vec<_> = view.edges.iter().filter(|e| !e.is_dashed).collect();
-        assert_eq!(dashed.len(), 2, "two host imports should produce dashed edges");
-        assert_eq!(solid.len(), 1, "one inter-component import should produce a solid edge");
+        assert_eq!(
+            dashed.len(),
+            2,
+            "two host imports should produce dashed edges"
+        );
+        assert_eq!(
+            solid.len(),
+            1,
+            "one inter-component import should produce a solid edge"
+        );
     }
 
     #[test]
@@ -617,9 +685,18 @@ mod tests {
         let graph = simple_chain_graph();
         let view = build_all_interfaces_view(&graph, false);
         let solid = view.edges.iter().find(|e| !e.is_dashed).unwrap();
-        assert!(solid.from_display.contains("srv"), "solid edge should come from srv");
-        assert!(solid.to_display.contains("middleware"), "solid edge should go to middleware");
-        assert_eq!(solid.label, "handler", "edge label should be short interface name");
+        assert!(
+            solid.from_display.contains("srv"),
+            "solid edge should come from srv"
+        );
+        assert!(
+            solid.to_display.contains("middleware"),
+            "solid edge should go to middleware"
+        );
+        assert_eq!(
+            solid.label, "handler",
+            "edge label should be short interface name"
+        );
     }
 
     #[test]
@@ -638,11 +715,17 @@ mod tests {
         // Verify the IR works for a non-http chain (keyvalue/store)
         let graph = two_chain_graph();
         let view = build_all_interfaces_view(&graph, false);
-        let kv_export = view.exports.iter().find(|e| e.full_name.contains("keyvalue"));
+        let kv_export = view
+            .exports
+            .iter()
+            .find(|e| e.full_name.contains("keyvalue"));
         assert!(kv_export.is_some(), "should have a keyvalue export");
         assert_eq!(kv_export.unwrap().short_name, "store");
 
-        let kv_solid = view.edges.iter().find(|e| !e.is_dashed && e.label == "store");
+        let kv_solid = view
+            .edges
+            .iter()
+            .find(|e| !e.is_dashed && e.label == "store");
         assert!(kv_solid.is_some(), "should have solid keyvalue/store edge");
         let kv_solid = kv_solid.unwrap();
         assert!(kv_solid.from_display.contains("db"));
@@ -669,7 +752,11 @@ mod tests {
         graph.add_node(1, real);
 
         // The synthetic node at idx 99
-        let synthetic = ComponentNode::new("$synthetic".to_string(), SYNTHETIC_COMPONENT, SYNTHETIC_COMPONENT);
+        let synthetic = ComponentNode::new(
+            "$synthetic".to_string(),
+            SYNTHETIC_COMPONENT,
+            SYNTHETIC_COMPONENT,
+        );
         graph.add_node(99, synthetic);
 
         let view = build_all_interfaces_view(&graph, false);
@@ -678,7 +765,10 @@ mod tests {
         assert!(
             view.edges.is_empty(),
             "edges from synthetic source nodes should be excluded, got: {:?}",
-            view.edges.iter().map(|e| (&e.from_display, &e.to_display)).collect::<Vec<_>>()
+            view.edges
+                .iter()
+                .map(|e| (&e.from_display, &e.to_display))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -688,7 +778,10 @@ mod tests {
         let view = build_full_view(&graph, false);
         // Full includes all nodes; host_names is empty
         assert!(view.nodes.len() >= 2);
-        assert!(view.host_names.is_empty(), "Full mode has no host node list");
+        assert!(
+            view.host_names.is_empty(),
+            "Full mode has no host node list"
+        );
     }
 
     #[test]
@@ -705,7 +798,11 @@ mod tests {
     fn test_view_full_edge_uses_full_name() {
         let graph = simple_chain_graph();
         let view = build_full_view(&graph, false);
-        let edge = view.edges.iter().find(|e| e.label.contains("handler")).unwrap();
+        let edge = view
+            .edges
+            .iter()
+            .find(|e| e.label.contains("handler"))
+            .unwrap();
         assert!(
             edge.label.contains("wasi:http/handler@0.3.0"),
             "Full mode should use full interface name as label, got: {}",
@@ -731,17 +828,28 @@ mod tests {
 
     #[test]
     fn test_view_full_synthetic_node_included() {
-        use crate::model::{ComponentNode, InterfaceConnection, SYNTHETIC_COMPONENT};
+        use crate::model::{ComponentNode, SYNTHETIC_COMPONENT};
         let mut graph = CompositionGraph::new();
 
         let real = ComponentNode::new("$real".to_string(), 0, 0);
         graph.add_node(1, real);
-        let synthetic = ComponentNode::new("$synth".to_string(), SYNTHETIC_COMPONENT, SYNTHETIC_COMPONENT);
+        let synthetic = ComponentNode::new(
+            "$synth".to_string(),
+            SYNTHETIC_COMPONENT,
+            SYNTHETIC_COMPONENT,
+        );
         graph.add_node(99, synthetic);
 
         let view = build_full_view(&graph, false);
-        assert_eq!(view.nodes.len(), 2, "Full mode should include synthetic nodes");
-        assert!(view.nodes.iter().any(|n| n.is_synthetic), "synthetic flag should be set");
+        assert_eq!(
+            view.nodes.len(),
+            2,
+            "Full mode should include synthetic nodes"
+        );
+        assert!(
+            view.nodes.iter().any(|n| n.is_synthetic),
+            "synthetic flag should be set"
+        );
         assert!(view.nodes.iter().any(|n| n.display.contains("synth")));
     }
 
@@ -772,7 +880,11 @@ mod tests {
         graph.add_node(2, b);
 
         let view = build_all_interfaces_view(&graph, false);
-        assert_eq!(view.host_names.len(), 1, "same host interface imported by two nodes should appear once");
+        assert_eq!(
+            view.host_names.len(),
+            1,
+            "same host interface imported by two nodes should appear once"
+        );
         assert_eq!(view.host_names[0], "wasi:logging/log@0.1.0");
     }
 }
