@@ -458,7 +458,7 @@ mod tests {
         let graph = CompositionGraph::new();
 
         let chain = generate_ascii(&graph, DetailLevel::HandlerChain, false);
-        assert!(chain.contains("No middleware chains found"), "{}", chain);
+        assert!(chain.contains("No service chains found"), "{}", chain);
 
         let all = generate_ascii(&graph, DetailLevel::AllInterfaces, false);
         assert!(all.contains("No component instances found"));

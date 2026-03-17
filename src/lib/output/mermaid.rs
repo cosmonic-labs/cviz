@@ -18,17 +18,55 @@ pub fn generate_mermaid(
     }
 }
 
-/// Render the type-symbol key as a visually secondary Mermaid subgraph.
+/// Word-wrap a single key entry line with a hanging indent.
 ///
-/// Key nodes use rounded rectangles and a grey/italic `classDef` so they read
-/// as annotation rather than component.  Returns an empty string when the
-/// SymbolMap is empty.
+/// The first token (the symbol, e.g. `✦`) acts as a bullet; continuation
+/// lines are indented by two spaces so they align past the `"✦ "` prefix.
+/// `max_cols` is measured in Unicode scalar values (display columns for the
+/// ASCII/symbol mix we emit).  Lines already short enough are returned as-is.
+fn wrap_bullet(line: &str, max_cols: usize) -> String {
+    if line.chars().count() <= max_cols {
+        return line.to_string();
+    }
+    // Continuation lines indent past the bullet symbol and its trailing space.
+    let indent = "  ";
+    let mut result = String::new();
+    let mut current = String::new();
+
+    for word in line.split_whitespace() {
+        if current.is_empty() {
+            current.push_str(word);
+        } else if current.chars().count() + 1 + word.chars().count() <= max_cols {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            if !result.is_empty() {
+                result.push_str("\\n");
+            }
+            result.push_str(&current);
+            current = format!("{indent}{word}");
+        }
+    }
+    if !current.is_empty() {
+        if !result.is_empty() {
+            result.push_str("\\n");
+        }
+        result.push_str(&current);
+    }
+    result
+}
+
+/// Render the type-symbol key as a plain-text annotation node.
+///
+/// Produces a single borderless Mermaid node with `Key` as a header and one
+/// wrapped entry per symbol.  Returns an empty string when the SymbolMap is
+/// empty.
 fn render_key(symbols: &SymbolMap) -> String {
     if symbols.is_empty() {
         return String::new();
     }
     let content = std::iter::once("Key".to_string())
-        .chain(symbols.key_lines())
+        .chain(symbols.key_lines().into_iter().map(|l| wrap_bullet(&l, 72)))
         .collect::<Vec<_>>()
         .join("\\n");
     let mut out = String::new();
@@ -37,13 +75,21 @@ fn render_key(symbols: &SymbolMap) -> String {
     out
 }
 
+/// Mermaid init directive that widens the text-wrapping threshold.
+///
+/// Mermaid auto-wraps node label text at ~200 px by default.  Setting a
+/// larger `wrappingWidth` prevents the renderer from breaking our carefully
+/// formatted key lines at unexpected points.
+const INIT_DIRECTIVE: &str =
+    "%%{init: {'flowchart': {'wrappingWidth': 600}}}%%\n";
+
 /// Generate a diagram showing all middleware chains (request flow direction)
 fn generate_handler_chain(
     graph: &CompositionGraph,
     direction: Direction,
     show_types: bool,
 ) -> String {
-    let mut output = String::new();
+    let mut output = String::from(INIT_DIRECTIVE);
     output.push_str(&format!("graph {}\n", direction.to_mermaid()));
 
     let chain_interfaces = find_chain_interfaces(graph);
@@ -140,7 +186,7 @@ fn generate_all_interfaces(
     show_types: bool,
 ) -> String {
     let view = build_all_interfaces_view(graph, show_types);
-    let mut output = format!("graph {}\n", direction.to_mermaid());
+    let mut output = format!("{INIT_DIRECTIVE}graph {}\n", direction.to_mermaid());
 
     if view.nodes.is_empty() {
         output.push_str("    empty[\"No component instances found\"]\n");
@@ -228,7 +274,7 @@ fn generate_all_interfaces(
 /// Generate a full diagram with all details
 fn generate_full(graph: &CompositionGraph, direction: Direction, show_types: bool) -> String {
     let view = build_full_view(graph, show_types);
-    let mut output = format!("graph {}\n", direction.to_mermaid());
+    let mut output = format!("{INIT_DIRECTIVE}graph {}\n", direction.to_mermaid());
 
     output.push_str("    subgraph all[\"All Instances\"]\n");
     for node in &view.nodes {
@@ -394,8 +440,8 @@ mod tests {
         );
 
         assert!(
-            output.starts_with("graph LR\n"),
-            "should start with graph direction"
+            output.contains("graph LR\n"),
+            "should contain graph direction"
         );
         assert!(
             output.contains("subgraph composition"),
@@ -429,7 +475,7 @@ mod tests {
             false,
         );
 
-        assert!(output.starts_with("graph LR\n"));
+        assert!(output.contains("graph LR\n"));
         // Host imports subgraph
         assert!(
             output.contains("subgraph host"),
@@ -460,7 +506,7 @@ mod tests {
         let graph = test_graph();
         let output = generate_mermaid(&graph, DetailLevel::Full, Direction::TopDown, false);
 
-        assert!(output.starts_with("graph TD\n"), "should use TD direction");
+        assert!(output.contains("graph TD\n"), "should use TD direction");
         assert!(
             output.contains("subgraph all"),
             "should have all-instances subgraph"
