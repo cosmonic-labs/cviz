@@ -16,7 +16,7 @@ fn generate_handler_chain_ascii(graph: &CompositionGraph, show_types: bool) -> S
     let chain_interfaces = find_chain_interfaces(graph);
 
     if chain_interfaces.is_empty() {
-        return box_content("Middleware Chains", &["No middleware chains found"]);
+        return box_content("Service Chains", &["No service chains found"]);
     }
 
     let mut symbols = SymbolMap::new();
@@ -93,7 +93,7 @@ fn generate_handler_chain_ascii(graph: &CompositionGraph, show_types: bool) -> S
         lines.extend(symbols.key_lines());
     }
 
-    box_content("Middleware Chains", &lines)
+    box_content("Service Chains", &lines)
 }
 
 /// Generate ASCII diagram showing all interface connections
@@ -395,7 +395,7 @@ mod tests {
         let graph = test_graph();
         let output = generate_ascii(&graph, DetailLevel::HandlerChain, false);
 
-        assert!(output.contains("Middleware Chains"), "should have title");
+        assert!(output.contains("Service Chains"), "should have title");
         assert!(output.contains("srv"), "should show srv node");
         assert!(output.contains("middleware"), "should show middleware node");
         assert!(output.contains("handler"), "should show handler label");

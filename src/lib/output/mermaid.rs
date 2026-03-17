@@ -57,7 +57,7 @@ fn generate_handler_chain(
 
     // One subgraph per chain interface, all nodes collected into a single
     // "Middleware Chains" subgraph
-    output.push_str("    subgraph composition[\"Middleware Chains\"]\n");
+    output.push_str("    subgraph composition[\"Service Chains\"]\n");
     for iface in &chain_interfaces {
         for &idx in &get_chain_for(graph, iface) {
             if let Some(node) = graph.get_node(idx) {
@@ -402,8 +402,8 @@ mod tests {
             "should have subgraph"
         );
         assert!(
-            output.contains("Middleware Chains"),
-            "should have Middleware Chains title"
+            output.contains("Service Chains"),
+            "should have Service Chains title"
         );
         assert!(output.contains("srv"), "should show srv node");
         assert!(output.contains("middleware"), "should show middleware node");
