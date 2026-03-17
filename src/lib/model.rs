@@ -463,6 +463,11 @@ impl CompositionGraph {
 
         for (id, node) in &self.nodes {
             for conn in &node.imports {
+                // Host imports point to a synthetic provider that is never in the
+                // nodes map — skip them.
+                if conn.is_host_import {
+                    continue;
+                }
                 let src = conn.source_instance;
                 if !self.nodes.contains_key(&src) {
                     return Err(format!(

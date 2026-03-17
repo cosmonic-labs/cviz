@@ -1,5 +1,5 @@
 pub mod ascii;
-// pub mod json;
+pub mod json;
 pub mod mermaid;
 
 use crate::model::{
