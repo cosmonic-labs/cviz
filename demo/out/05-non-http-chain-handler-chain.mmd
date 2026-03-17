@@ -1,0 +1,11 @@
+graph LR
+    subgraph composition["Middleware Chains"]
+        filter["filter"]
+        consumer["consumer"]
+    end
+
+    export_wasi_messaging_consumer_0_2_0(["Export: consumer"]) --> filter
+    filter -->|"consumer✦"| consumer
+
+    key["Key\n✦ `consume`: (string) -> string"]
+    style key fill:none,stroke:none,text-align:left,color:#888

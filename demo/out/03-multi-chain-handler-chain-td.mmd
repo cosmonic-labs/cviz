@@ -1,0 +1,15 @@
+graph TD
+    subgraph composition["Middleware Chains"]
+        http_auth["http-auth"]
+        http_core["http-core"]
+        kv_cache["kv-cache"]
+        kv_store["kv-store"]
+    end
+
+    export_wasi_http_handler_0_3_0(["Export: handler"]) --> http_auth
+    http_auth -->|"handler✦"| http_core
+    export_wasi_keyvalue_store_0_1_0(["Export: store"]) --> kv_cache
+    kv_cache -->|"store✧"| kv_store
+
+    key["Key\n✦ `handle`: () -> ()\n✧ `get`: (string) -> string"]
+    style key fill:none,stroke:none,text-align:left,color:#888

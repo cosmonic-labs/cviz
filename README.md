@@ -4,6 +4,8 @@ A CLI tool to visualize WebAssembly component composition structure.
 
 cviz parses composed WebAssembly components and generates diagrams showing how component instances are wired together. It's particularly useful for understanding middleware chains in WASI HTTP components.
 
+Curious what this tool does? Clone the repo and run the demo! `cargo run --example demo`
+
 ## Installation
 
 ```bash
@@ -45,9 +47,9 @@ cviz composed.wasm
 ┌────────────────────────────────────┐
 │          Middleware Chain          │
 ├────────────────────────────────────┤
-│srv ──handler──> mdl-c              │
-│mdl-c ──handler──> mdl-b            │
-│mdl-b ──handler──> mdl-a            │
+│srv ── handler ──> mdl-c            │
+│mdl-c ── handler ──> mdl-b          │
+│mdl-b ── handler ──> mdl-a          │
 │mdl-a ──> [Export: handler]         │
 └────────────────────────────────────┘
 ```
@@ -118,10 +120,10 @@ cviz composed.wasm -l all-interfaces
 ┌───────────────────────────────────────────┐
 │                Connections                │
 ├───────────────────────────────────────────┤
-│  [srv] ──handler──> [mdl-c]               │
-│  [mdl-c] ──handler──> [mdl-b]             │
-│  [mdl-b] ──handler──> [mdl-a]             │
-│  {environment} -.environment.- [srv]      │
+│  [srv] ── handler ──> [mdl-c]             │
+│  [mdl-c] ── handler ──> [mdl-b]           │
+│  [mdl-b] ── handler ──> [mdl-a]           │
+│  {environment} --- environment --- [srv]  │
 │  ...                                      │
 └───────────────────────────────────────────┘
 ```

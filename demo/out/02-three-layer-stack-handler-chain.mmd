@@ -1,0 +1,13 @@
+graph LR
+    subgraph composition["Middleware Chains"]
+        rate["rate"]
+        auth["auth"]
+        core["core"]
+    end
+
+    export_wasi_http_handler_0_3_0(["Export: handler"]) --> rate
+    rate -->|"handler✦"| auth
+    auth -->|"handler✦"| core
+
+    key["Key\n✦ `handle`: () -> ()"]
+    style key fill:none,stroke:none,text-align:left,color:#888
