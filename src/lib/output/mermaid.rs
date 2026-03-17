@@ -80,8 +80,7 @@ fn render_key(symbols: &SymbolMap) -> String {
 /// Mermaid auto-wraps node label text at ~200 px by default.  Setting a
 /// larger `wrappingWidth` prevents the renderer from breaking our carefully
 /// formatted key lines at unexpected points.
-const INIT_DIRECTIVE: &str =
-    "%%{init: {'flowchart': {'wrappingWidth': 600}}}%%\n";
+const INIT_DIRECTIVE: &str = "%%{init: {'flowchart': {'wrappingWidth': 600}}}%%\n";
 
 /// Generate a diagram showing all middleware chains (request flow direction)
 fn generate_handler_chain(

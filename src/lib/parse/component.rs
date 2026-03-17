@@ -4,6 +4,7 @@ use crate::model::{
 };
 use anyhow::Result;
 use std::collections::HashMap;
+use wirm::ir::component::concrete::{ConcreteFuncType, ConcreteType, ConcreteValType};
 use wirm::ir::component::refs::{GetCompRefs, GetItemRef};
 use wirm::ir::component::visitor::{
     walk_structural, ComponentVisitor, ItemKind, ResolvedItem, VisitCtx,
@@ -11,7 +12,7 @@ use wirm::ir::component::visitor::{
 use wirm::wasmparser::{
     ComponentAlias, ComponentExport, ComponentInstance, ComponentTypeRef, PrimitiveValType,
 };
-use wirm::{Component, ConcreteFuncType, ConcreteType, ConcreteValType};
+use wirm::Component;
 
 /// Parse a WebAssembly component file and extract its composition graph
 pub fn parse_component(buff: &[u8]) -> Result<CompositionGraph> {
@@ -184,7 +185,10 @@ fn pull_type_info(
     concrete_to_interface_type(comp.concretize_import(interface_name)?, &mut graph.arena)
 }
 
-fn concrete_to_interface_type(ty: ConcreteType, arena: &mut TypeArena) -> Option<InterfaceType> {
+fn concrete_to_interface_type<'a>(
+    ty: ConcreteType<'a>,
+    arena: &mut TypeArena,
+) -> Option<InterfaceType> {
     match ty {
         ConcreteType::Instance(funcs) => {
             let functions = funcs
@@ -198,12 +202,12 @@ fn concrete_to_interface_type(ty: ConcreteType, arena: &mut TypeArena) -> Option
     }
 }
 
-fn intern(ty: ConcreteValType, arena: &mut TypeArena) -> ValueTypeId {
+fn intern<'a>(ty: ConcreteValType<'a>, arena: &mut TypeArena) -> ValueTypeId {
     let vt = concrete_to_val_type(ty, arena);
     arena.intern_val(vt)
 }
 
-fn concrete_to_func_sig(ft: ConcreteFuncType, arena: &mut TypeArena) -> FuncSignature {
+fn concrete_to_func_sig<'a>(ft: ConcreteFuncType<'a>, arena: &mut TypeArena) -> FuncSignature {
     let params = ft
         .params
         .into_iter()
@@ -213,7 +217,7 @@ fn concrete_to_func_sig(ft: ConcreteFuncType, arena: &mut TypeArena) -> FuncSign
     FuncSignature { params, results }
 }
 
-fn concrete_to_val_type(ty: ConcreteValType, arena: &mut TypeArena) -> ValueType {
+fn concrete_to_val_type<'a>(ty: ConcreteValType<'a>, arena: &mut TypeArena) -> ValueType {
     match ty {
         ConcreteValType::Primitive(p) => prim_to_val_type(p),
         ConcreteValType::Record(fields) => ValueType::Record(
