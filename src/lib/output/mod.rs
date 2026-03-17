@@ -146,6 +146,24 @@ impl SymbolMap {
         &self.entries.last().unwrap().1
     }
 
+    /// Return (or assign) the symbol for a pre-computed fingerprint + type lines,
+    /// or an empty string when `show_types` is false or no fingerprint is present.
+    ///
+    /// This is the primary entry point for AllInterfaces/Full renderers that
+    /// receive type data from the [`DiagramEdge`]/[`DiagramExport`] IR.
+    pub(crate) fn assign(&mut self, show_types: bool, fingerprint: Option<&str>, type_lines: Vec<String>) -> String {
+        if !show_types {
+            return String::new();
+        }
+        let Some(fp) = fingerprint else { return String::new() };
+        if let Some(pos) = self.entries.iter().position(|(f, _, _)| f == fp) {
+            return self.entries[pos].1.clone();
+        }
+        let symbol = symbol_at(self.entries.len());
+        self.entries.push((fp.to_string(), symbol, type_lines));
+        self.entries.last().unwrap().1.clone()
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -189,7 +207,10 @@ pub(crate) struct DiagramEdge {
     pub to_display: String,
     /// Ready-to-use edge label (short interface name or full name, depending on mode).
     pub label: String,
+    /// Pre-formatted type lines for this connection (empty when show_types=false).
     pub type_lines: Vec<String>,
+    /// Fingerprint for deduplication in a [`SymbolMap`] (None when no type info).
+    pub fingerprint: Option<String>,
     /// true if host import
     pub is_dashed: bool,
 }
@@ -200,7 +221,10 @@ pub(crate) struct DiagramExport {
     pub from_display: String,
     pub full_name: String,
     pub short_name: String,
+    /// Pre-formatted type lines for this export (empty when show_types=false).
     pub type_lines: Vec<String>,
+    /// Fingerprint for deduplication in a [`SymbolMap`] (None when no type info).
+    pub fingerprint: Option<String>,
 }
 
 /// Pre-computed graph data for rendering, independent of output format.
@@ -241,6 +265,7 @@ pub(crate) fn build_all_interfaces_view(graph: &CompositionGraph, show_types: bo
                     to_display: node.display_label().to_string(),
                     label: import.short_label(),
                     type_lines: connection_type_lines(import, &graph.arena, show_types),
+                    fingerprint: import.fingerprint.clone(),
                     is_dashed: true,
                 });
             } else if let Some(src) = graph.get_node(import.source_instance) {
@@ -252,6 +277,7 @@ pub(crate) fn build_all_interfaces_view(graph: &CompositionGraph, show_types: bo
                         to_display: node.display_label().to_string(),
                         label: import.short_label(),
                         type_lines: connection_type_lines(import, &graph.arena, show_types),
+                        fingerprint: import.fingerprint.clone(),
                         is_dashed: false,
                     });
                 }
@@ -269,6 +295,7 @@ pub(crate) fn build_all_interfaces_view(graph: &CompositionGraph, show_types: bo
                     full_name: export_name.clone(),
                     short_name: short_interface_name(export_name),
                     type_lines: export_type_lines(export_info, &graph.arena, show_types),
+                    fingerprint: export_info.fingerprint.clone(),
                 });
             }
         }
@@ -305,6 +332,7 @@ pub(crate) fn build_full_view(graph: &CompositionGraph, show_types: bool) -> Con
                         to_display: node.display_label().to_string(),
                         label: import.interface_name.clone(),
                         type_lines: connection_type_lines(import, &graph.arena, show_types),
+                        fingerprint: import.fingerprint.clone(),
                         is_dashed: false,
                     });
                 }
@@ -321,6 +349,7 @@ pub(crate) fn build_full_view(graph: &CompositionGraph, show_types: bool) -> Con
                 full_name: export_name.clone(),
                 short_name: short_interface_name(export_name),
                 type_lines: export_type_lines(export_info, &graph.arena, show_types),
+                fingerprint: export_info.fingerprint.clone(),
             });
         }
     }

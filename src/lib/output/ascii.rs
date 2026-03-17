@@ -71,7 +71,7 @@ fn generate_handler_chain_ascii(graph: &CompositionGraph, show_types: bool) -> S
                         .flatten()
                         .unwrap_or_default();
                     lines.push(format!(
-                        "{} ──{}{}──> {}",
+                        "{} ── {}{} ──> {}",
                         from_node.display_label(),
                         short, conn_sym,
                         to_node.display_label()
@@ -116,28 +116,32 @@ fn generate_all_interfaces_ascii(graph: &CompositionGraph, show_types: bool) -> 
     output.push_str(&box_content("Component Instances", &instance_lines));
     output.push('\n');
 
+    let mut symbols = SymbolMap::new();
     let mut connection_lines = Vec::new();
+
     for edge in &view.edges {
+        let sym = symbols.assign(show_types, edge.fingerprint.as_deref(), edge.type_lines.clone());
         if edge.is_dashed {
             connection_lines.push(format!(
-                "  {{{}}} -.{}.- [{}]",
-                edge.from_display, edge.label, edge.to_display
+                "  {{{}}} --- {}{} --- [{}]",
+                edge.from_display, edge.label, sym, edge.to_display
             ));
         } else {
             connection_lines.push(format!(
-                "  [{}] ──{}──> [{}]",
-                edge.from_display, edge.label, edge.to_display
+                "  [{}] ── {}{} ──> [{}]",
+                edge.from_display, edge.label, sym, edge.to_display
             ));
         }
-        for line in &edge.type_lines {
-            connection_lines.push(format!("      {}", line));
-        }
     }
+
     for exp in &view.exports {
-        connection_lines.push(format!("  [{}] ──> (Export: {})", exp.from_display, exp.short_name));
-        for line in &exp.type_lines {
-            connection_lines.push(format!("      {}", line));
-        }
+        let sym = symbols.assign(show_types, exp.fingerprint.as_deref(), exp.type_lines.clone());
+        connection_lines.push(format!("  [{}] ──> (Export: {}{})", exp.from_display, exp.short_name, sym));
+    }
+
+    if !symbols.is_empty() {
+        connection_lines.push(String::new());
+        connection_lines.extend(symbols.key_lines().into_iter().map(|l| format!("  {}", l)));
     }
 
     if !connection_lines.is_empty() {
@@ -170,21 +174,25 @@ fn generate_full_ascii(graph: &CompositionGraph, show_types: bool) -> String {
     output.push_str(&box_content("All Instances", &instance_lines));
     output.push('\n');
 
+    let mut symbols = SymbolMap::new();
     let mut connection_lines = Vec::new();
+
     for edge in &view.edges {
+        let sym = symbols.assign(show_types, edge.fingerprint.as_deref(), edge.type_lines.clone());
         connection_lines.push(format!(
-            "  [{}] ──{}──> [{}]",
-            edge.from_display, edge.label, edge.to_display
+            "  [{}] ── {}{} ──> [{}]",
+            edge.from_display, edge.label, sym, edge.to_display
         ));
-        for line in &edge.type_lines {
-            connection_lines.push(format!("      {}", line));
-        }
     }
+
     for exp in &view.exports {
-        connection_lines.push(format!("  [{}] ──> (Export: {})", exp.from_display, exp.full_name));
-        for line in &exp.type_lines {
-            connection_lines.push(format!("      {}", line));
-        }
+        let sym = symbols.assign(show_types, exp.fingerprint.as_deref(), exp.type_lines.clone());
+        connection_lines.push(format!("  [{}] ──> (Export: {}{})", exp.from_display, exp.full_name, sym));
+    }
+
+    if !symbols.is_empty() {
+        connection_lines.push(String::new());
+        connection_lines.extend(symbols.key_lines().into_iter().map(|l| format!("  {}", l)));
     }
 
     if !connection_lines.is_empty() {
@@ -364,7 +372,7 @@ mod tests {
             "should show export pointing to outermost handler"
         );
         assert!(
-            output.contains("middleware ──handler──> srv"),
+            output.contains("middleware ── handler ──> srv"),
             "should show request flow from middleware to srv"
         );
     }
@@ -446,7 +454,7 @@ mod tests {
         let output = generate_ascii(&graph, DetailLevel::HandlerChain, false);
         // Export entry point must appear before the middleware→srv edge
         let export_pos = line_pos(&output, "[Export: handler] ──>");
-        let edge_pos = line_pos(&output, "middleware ──handler──> srv");
+        let edge_pos = line_pos(&output, "middleware ── handler ──> srv");
         assert!(export_pos < edge_pos, "export entry should precede chain edge");
     }
 
@@ -455,8 +463,8 @@ mod tests {
         let graph = long_chain_graph(); // messaging/consumer: gateway → service → backend
         let output = generate_ascii(&graph, DetailLevel::HandlerChain, false);
         let export_pos = line_pos(&output, "[Export: consumer] ──>");
-        let first_edge_pos = line_pos(&output, "gateway ──consumer──> service");
-        let second_edge_pos = line_pos(&output, "service ──consumer──> backend");
+        let first_edge_pos = line_pos(&output, "gateway ── consumer ──> service");
+        let second_edge_pos = line_pos(&output, "service ── consumer ──> backend");
         assert!(export_pos < first_edge_pos, "export should precede gateway→service");
         assert!(first_edge_pos < second_edge_pos, "gateway→service should precede service→backend");
     }
@@ -478,11 +486,11 @@ mod tests {
         let graph = two_chain_graph();
         let output = generate_ascii(&graph, DetailLevel::HandlerChain, false);
         assert!(
-            output.contains("mw-http ──handler──> srv-http"),
+            output.contains("mw-http ── handler ──> srv-http"),
             "should show http handler chain edge, got:\n{}", output
         );
         assert!(
-            output.contains("cache ──store──> db"),
+            output.contains("cache ── store ──> db"),
             "should show keyvalue chain edge, got:\n{}", output
         );
     }
@@ -512,8 +520,8 @@ mod tests {
         assert!(output.contains("gateway"), "should show gateway node");
         assert!(output.contains("service"), "should show service node");
         assert!(output.contains("backend"), "should show backend node");
-        assert!(output.contains("gateway ──consumer──> service"), "should show first hop");
-        assert!(output.contains("service ──consumer──> backend"), "should show second hop");
+        assert!(output.contains("gateway ── consumer ──> service"), "should show first hop");
+        assert!(output.contains("service ── consumer ──> backend"), "should show second hop");
     }
 
     // -----------------------------------------------------------------------
@@ -590,7 +598,7 @@ mod tests {
         // Host import edges use dashed style with braces for the interface name.
         // $srv imports handler directly from the host.
         assert!(
-            output.contains("{handler} -.handler.- [srv]"),
+            output.contains("{handler} --- handler --- [srv]"),
             "host edge should use dashed format, got:\n{}", output
         );
     }
@@ -600,7 +608,7 @@ mod tests {
         let graph = simple_chain_graph();
         let output = generate_ascii(&graph, DetailLevel::AllInterfaces, false);
         assert!(
-            output.contains("[srv] ──handler──> [middleware]"),
+            output.contains("[srv] ── handler ──> [middleware]"),
             "component edge should use solid arrow format, got:\n{}", output
         );
     }
@@ -620,7 +628,7 @@ mod tests {
         // Type lines should appear *below the export line*, not just somewhere in the output.
         let graph = typed_chain_graph();
         let output = generate_ascii(&graph, DetailLevel::AllInterfaces, true);
-        let export_pos = line_pos(&output, "──> (Export: handler)");
+        let export_pos = line_pos(&output, "──> (Export: handler");
         let sig_after_export = output
             .lines()
             .skip(export_pos + 1)
@@ -638,8 +646,8 @@ mod tests {
         assert!(output.contains("db"), "should show db");
         assert!(output.contains("cache"), "should show cache");
         // Both chain edges
-        assert!(output.contains("[srv-http] ──handler──> [mw-http]"), "should show handler edge");
-        assert!(output.contains("[db] ──store──> [cache]"), "should show store edge");
+        assert!(output.contains("[srv-http] ── handler ──> [mw-http]"), "should show handler edge");
+        assert!(output.contains("[db] ── store ──> [cache]"), "should show store edge");
         // Both exports
         assert!(output.contains("(Export: handler)"), "should show handler export");
         assert!(output.contains("(Export: store)"), "should show store export");

@@ -16,17 +16,23 @@ pub fn generate_mermaid(
     }
 }
 
-/// Build an edge label string, optionally appending WIT function signatures.
+/// Render the type-symbol key as a visually secondary Mermaid subgraph.
 ///
-/// When `type_lines` is non-empty the label becomes:
-/// `"base_label\nfn1: sig\nfn2: sig"` — Mermaid renders `\n` as a line break
-/// in most environments.
-fn edge_label(base: &str, type_lines: &[String]) -> String {
-    if type_lines.is_empty() {
-        base.to_string()
-    } else {
-        format!("{}\\n{}", base, type_lines.join("\\n"))
+/// Key nodes use rounded rectangles and a grey/italic `classDef` so they read
+/// as annotation rather than component.  Returns an empty string when the
+/// SymbolMap is empty.
+fn render_key(symbols: &SymbolMap) -> String {
+    if symbols.is_empty() {
+        return String::new();
     }
+    let content = std::iter::once("Key".to_string())
+        .chain(symbols.key_lines())
+        .collect::<Vec<_>>()
+        .join("\\n");
+    let mut out = String::new();
+    out.push_str(&format!("\n    key[\"{content}\"]\n"));
+    out.push_str("    style key fill:none,stroke:none,text-align:left,color:#888\n");
+    out
 }
 
 /// Generate a diagram showing all middleware chains (request flow direction)
@@ -110,14 +116,7 @@ fn generate_handler_chain(graph: &CompositionGraph, direction: Direction, show_t
     }
 
     // Key subgraph — shared across all chains
-    if !symbols.is_empty() {
-        output.push('\n');
-        output.push_str("    subgraph key[\"Key\"]\n");
-        for (i, line) in symbols.key_lines().iter().enumerate() {
-            output.push_str(&format!("        k{}[\"{}\"]\n", i, line));
-        }
-        output.push_str("    end\n");
-    }
+    output.push_str(&render_key(&symbols));
 
     output
 }
@@ -150,30 +149,46 @@ fn generate_all_interfaces(graph: &CompositionGraph, direction: Direction, show_
     }
     output.push_str("    end\n\n");
 
+    let mut symbols = SymbolMap::new();
+
     for edge in &view.edges {
         let from_id = sanitize_for_mermaid(&edge.from_name);
         let to_id = sanitize_for_mermaid(&edge.to_name);
-        let lbl = edge_label(&edge.label, &edge.type_lines);
+        let sym = symbols.assign(show_types, edge.fingerprint.as_deref(), edge.type_lines.clone());
         if edge.is_dashed {
-            output.push_str(&format!("    {} -.->|\"{}\"| {}\n", from_id, lbl, to_id));
+            output.push_str(&format!("    {} -->|\"{}{}\"| {}\n", from_id, edge.label, sym, to_id));
         } else {
-            output.push_str(&format!("    {} -->|\"{}\"| {}\n", from_id, lbl, to_id));
+            output.push_str(&format!("    {} ──>|\"{}{}\"| {}\n", from_id, edge.label, sym, to_id));
         }
     }
 
     output.push('\n');
     for exp in &view.exports {
-        let lbl = edge_label(&exp.short_name, &exp.type_lines);
+        let sym = symbols.assign(show_types, exp.fingerprint.as_deref(), exp.type_lines.clone());
         output.push_str(&format!(
-            "    {} --> export_{}([\"Export: {}\"])\n",
+            "    {} --> export_{}([\"Export: {}{}\"])\n",
             sanitize_for_mermaid(&exp.from_name),
             sanitize_for_mermaid(&exp.full_name),
-            lbl
+            exp.short_name, sym
         ));
     }
 
+    output.push_str(&render_key(&symbols));
+
     output
 }
+
+// let lines = symbols.key_lines();
+//  29 -    let node_ids: Vec<String> = (0..lines.len()).map(|i| format!("k{i}")).collect();
+//  30 -    let mut out = String::from("\n    subgraph key[\"Key\"]\n");
+//  31 -    for (id, line) in node_ids.iter().zip(&lines) {
+//  32 -        out.push_str(&format!("        {id}[\"{line}\"]\n"));
+//  33 -    }
+//  34 -    out.push_str("    end\n");
+//  35 -    // Make the subgraph and its nodes look like plain text — no borders, no fill.
+//  36 -    out.push_str("    style key fill:none,stroke:none,color:#666\n");
+//  37 -    out.push_str("    classDef keyNote fill:none,stroke:none,color:#888\n");
+//  38 -    out.push_str(&format!("    class {} keyNote\n", node_ids.join(",")));
 
 /// Generate a full diagram with all details
 fn generate_full(graph: &CompositionGraph, direction: Direction, show_types: bool) -> String {
@@ -191,26 +206,30 @@ fn generate_full(graph: &CompositionGraph, direction: Direction, show_types: boo
     }
     output.push_str("    end\n\n");
 
+    let mut symbols = SymbolMap::new();
+
     for edge in &view.edges {
-        let lbl = edge_label(&edge.label, &edge.type_lines);
+        let sym = symbols.assign(show_types, edge.fingerprint.as_deref(), edge.type_lines.clone());
         output.push_str(&format!(
-            "    {} -->|\"{}\"| {}\n",
+            "    {} -->|\"{}{}\"| {}\n",
             sanitize_for_mermaid(&edge.from_name),
-            lbl,
+            edge.label, sym,
             sanitize_for_mermaid(&edge.to_name)
         ));
     }
 
     output.push('\n');
     for exp in &view.exports {
-        let lbl = edge_label(&exp.full_name, &exp.type_lines);
+        let sym = symbols.assign(show_types, exp.fingerprint.as_deref(), exp.type_lines.clone());
         output.push_str(&format!(
-            "    {} --> export_{}([\"Export: {}\"])\n",
+            "    {} --> export_{}([\"Export: {}{}\"])\n",
             sanitize_for_mermaid(&exp.from_name),
             sanitize_for_mermaid(&exp.full_name),
-            lbl
+            exp.full_name, sym
         ));
     }
+
+    output.push_str(&render_key(&symbols));
 
     output
 }
@@ -363,10 +382,10 @@ mod tests {
         );
         // Connections
         assert!(
-            output.contains("-.->"),
+            output.contains("-->"),
             "should have dashed host import edges"
         );
-        assert!(output.contains("-->|"), "should have solid instance edges");
+        assert!(output.contains("──>|"), "should have solid instance edges");
         // Export
         assert!(output.contains("Export"), "should have export");
     }
@@ -501,23 +520,23 @@ mod tests {
     fn test_handler_chain_types_key_subgraph_mermaid() {
         let graph = typed_chain_graph();
         let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, true);
-        assert!(output.contains("subgraph key"), "should have key subgraph when show_types=true");
+        assert!(output.contains("key[\"Key"), "should have key node when show_types=true");
     }
 
     #[test]
     fn test_handler_chain_types_key_content_mermaid() {
         let graph = typed_chain_graph();
         let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, true);
-        assert!(output.contains("`handle`: (u32) -> bool"), "key subgraph should contain function signature");
+        assert!(output.contains("`handle`: (u32) -> bool"), "key node should contain function signature");
     }
 
     #[test]
     fn test_two_typed_chains_distinct_symbols_mermaid() {
         let graph = two_typed_chain_graph();
         let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, true);
-        // Two distinct types → two key node entries (k0 and k1)
-        assert!(output.contains("k0["), "should have first key entry");
-        assert!(output.contains("k1["), "should have second key entry");
+        // Two distinct types → two entries in the single key node (separated by \n in the label)
+        let key_line = output.lines().find(|l| l.contains("key[\"Key")).expect("no key node");
+        assert!(key_line.matches("->").count() >= 2, "key should contain two type entries, got: {key_line}");
     }
 
     // -----------------------------------------------------------------------
@@ -537,7 +556,7 @@ mod tests {
     fn test_all_interfaces_dashed_edge_present() {
         let graph = simple_chain_graph();
         let output = generate_mermaid(&graph, DetailLevel::AllInterfaces, Direction::LeftToRight, false);
-        assert!(output.contains("-.->\"|\"handler\"|") || output.contains("-.->|\"handler\"|"),
+        assert!(output.contains("-->\"|\"handler\"|") || output.contains("-->|\"handler\"|"),
             "should have dashed edge for host handler import, got:\n{}", output);
     }
 
@@ -553,7 +572,7 @@ mod tests {
     fn test_handler_chain_no_key_subgraph_when_types_disabled() {
         let graph = typed_chain_graph();
         let output = generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, false);
-        assert!(!output.contains("subgraph key"), "no key subgraph when show_types=false");
+        assert!(!output.contains("key[\"Key"), "no key node when show_types=false");
     }
 
     #[test]
@@ -569,7 +588,7 @@ mod tests {
         assert!(output.contains("Export: handler"), "should have handler export");
         assert!(output.contains("Export: store"), "should have store export");
         // Both dashed host edges
-        assert_eq!(output.matches("-.->\"|\"handler\"|").count() + output.matches("-.->|\"handler\"|").count(), 1,
+        assert_eq!(output.matches("-->\"|\"handler\"|").count() + output.matches("-->|\"handler\"|").count(), 1,
             "should have one dashed handler edge");
     }
 
