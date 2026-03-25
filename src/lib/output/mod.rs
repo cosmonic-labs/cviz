@@ -8,16 +8,21 @@ use crate::model::{
 };
 
 /// Format a function signature as `(param-type, ...) -> result-type`.
+///
+/// Uses [`TypeArena::display_val`] so that large complex types (variants with
+/// many cases, records with many fields, etc.) are summarised rather than
+/// expanded in full.  Fingerprinting is unaffected — it always uses the
+/// lossless [`TypeArena::canonical_val`].
 pub(crate) fn format_func_sig(sig: &FuncSignature, arena: &TypeArena) -> String {
     let params: Vec<String> = sig
         .params
         .iter()
-        .map(|id| arena.canonical_val(*id))
+        .map(|id| arena.display_val(*id))
         .collect();
     let results: Vec<String> = sig
         .results
         .iter()
-        .map(|id| arena.canonical_val(*id))
+        .map(|id| arena.display_val(*id))
         .collect();
     let result_str = match results.as_slice() {
         [] => "()".to_string(),

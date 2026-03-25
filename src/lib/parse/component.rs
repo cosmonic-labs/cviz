@@ -1,6 +1,6 @@
 use crate::model::{
     ComponentNode, CompositionGraph, FuncSignature, InstanceInterface, InterfaceConnection,
-    InterfaceType, TypeArena, ValueType, ValueTypeId,
+    InterfaceType, TypeArena, ValueType, ValueTypeId, SYNTHETIC_COMPONENT,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -10,7 +10,8 @@ use wirm::ir::component::visitor::{
     walk_structural, ComponentVisitor, ItemKind, ResolvedItem, VisitCtx,
 };
 use wirm::wasmparser::{
-    ComponentAlias, ComponentExport, ComponentInstance, ComponentTypeRef, PrimitiveValType,
+    ComponentAlias, ComponentExport, ComponentExternalKind, ComponentInstance, ComponentTypeRef,
+    PrimitiveValType,
 };
 use wirm::Component;
 
@@ -21,6 +22,36 @@ pub fn parse_component(buff: &[u8]) -> Result<CompositionGraph> {
 
     walk_structural(&component, &mut visitor);
     visitor.postprocess();
+
+    // Post-process: fill in fingerprints for top-level instance exports that the visitor
+    // couldn't resolve during the walk (e.g. shim-component pattern from wit-component,
+    // or middleware that directly re-exports an imported instance).  Now that wirm's
+    // concretize_export handles CompInst::Instantiate and Import re-exports, calling it
+    // on the root component resolves the correct type.
+    for export in component.exports.iter() {
+        if export.kind != ComponentExternalKind::Instance {
+            continue;
+        }
+        let name = export.name.0;
+        let needs_fill = visitor
+            .graph
+            .component_exports
+            .get(name)
+            .map_or(true, |e| e.fingerprint.is_none());
+        if needs_fill {
+            if let Some(ct) = component.concretize_export(name) {
+                if let Some(it) = concrete_to_interface_type(ct, &mut visitor.graph.arena) {
+                    let source = visitor
+                        .graph
+                        .component_exports
+                        .get(name)
+                        .map_or(SYNTHETIC_COMPONENT, |e| e.source_instance);
+                    visitor.graph.add_export(name.to_string(), source, Some(it));
+                }
+            }
+        }
+    }
+
     Ok(visitor.graph)
 }
 struct Visitor {
@@ -467,6 +498,175 @@ mod tests {
                 .any(|i| i.contains("wasi:http/handler")),
             "expected host handler interface, got: {:?}",
             host_interfaces
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Fingerprint post-processing tests (RC-1, RC-2, RC-3 coverage)
+    // -----------------------------------------------------------------------
+
+    /// Standalone middleware using the FromExports synthetic-instance pattern.
+    /// Export resolves to `CompInst::FromExports` — handled by the existing arm;
+    /// the post-processing pass must not clobber the fingerprint.
+    #[test]
+    fn fingerprint_from_exports_instance() {
+        let wat = r#"(component
+            (import "wasi:http/handler@0.3.0" (instance $host
+                (export "handle" (func (param "req" u32) (result u32)))
+            ))
+            (alias export $host "handle" (func $f))
+            (instance $out (export "handle" (func $f)))
+            (export "wasi:http/handler@0.3.0" (instance $out))
+        )"#;
+        let bytes = wat::parse_str(wat).expect("failed to parse WAT");
+        let graph = parse_component(&bytes).expect("failed to parse component");
+
+        let export = graph
+            .component_exports
+            .get("wasi:http/handler@0.3.0")
+            .expect("expected export for wasi:http/handler@0.3.0");
+        assert!(
+            export.fingerprint.is_some(),
+            "expected non-None fingerprint for FromExports middleware, got None"
+        );
+    }
+
+    /// Standalone middleware using the shim-component (Instantiate) pattern.
+    /// The outer component exports an instantiated nested shim component as the
+    /// interface instance — the primary bug (RC-1/RC-2).  After the fix the
+    /// post-processing pass fills in the fingerprint via `concretize_export`.
+    #[test]
+    fn fingerprint_from_shim_component() {
+        let wat = r#"(component
+            (component $shim
+                (import "handle" (func $h (param "req" u32) (result u32)))
+                (export "handle" (func $h))
+            )
+            (import "handle" (func $h (param "req" u32) (result u32)))
+            (instance $shim-inst (instantiate $shim
+                (with "handle" (func $h))
+            ))
+            (export "wasi:http/handler@0.3.0" (instance $shim-inst))
+        )"#;
+        let bytes = wat::parse_str(wat).expect("failed to parse WAT");
+        let graph = parse_component(&bytes).expect("failed to parse component");
+
+        let export = graph
+            .component_exports
+            .get("wasi:http/handler@0.3.0")
+            .expect("expected export for wasi:http/handler@0.3.0");
+        assert!(
+            export.fingerprint.is_some(),
+            "expected non-None fingerprint for shim-component middleware, got None"
+        );
+    }
+
+    /// Standalone middleware that directly re-exports an imported instance (RC-3).
+    /// The visitor drops this export entirely; the post-processing pass must add it
+    /// with a valid fingerprint.
+    #[test]
+    fn fingerprint_from_import_reexport() {
+        let wat = r#"(component
+            (import "wasi:http/handler@0.3.0" (instance $handler
+                (export "handle" (func (param "req" u32) (result u32)))
+            ))
+            (export "wasi:http/handler@0.3.0" (instance $handler))
+        )"#;
+        let bytes = wat::parse_str(wat).expect("failed to parse WAT");
+        let graph = parse_component(&bytes).expect("failed to parse component");
+
+        let export = graph
+            .component_exports
+            .get("wasi:http/handler@0.3.0")
+            .expect("expected export for wasi:http/handler@0.3.0");
+        assert!(
+            export.fingerprint.is_some(),
+            "expected non-None fingerprint for import-reexport middleware, got None"
+        );
+    }
+
+    /// Parsing two components that export the same interface with the same function
+    /// signature must produce equal fingerprints.
+    #[test]
+    fn fingerprint_matches_between_chain_and_mw() {
+        // Both components export "handle" (func (param u32) (result u32)).
+        let chain_wat = r#"(component
+            (import "wasi:http/handler@0.3.0" (instance $host
+                (export "handle" (func (param "req" u32) (result u32)))
+            ))
+            (alias export $host "handle" (func $f))
+            (instance $out (export "handle" (func $f)))
+            (export "wasi:http/handler@0.3.0" (instance $out))
+        )"#;
+        let mw_wat = r#"(component
+            (import "wasi:http/handler@0.3.0" (instance $handler
+                (export "handle" (func (param "req" u32) (result u32)))
+            ))
+            (export "wasi:http/handler@0.3.0" (instance $handler))
+        )"#;
+        let chain_bytes = wat::parse_str(chain_wat).expect("failed to parse chain WAT");
+        let mw_bytes = wat::parse_str(mw_wat).expect("failed to parse middleware WAT");
+
+        let chain_graph = parse_component(&chain_bytes).expect("failed to parse chain");
+        let mw_graph = parse_component(&mw_bytes).expect("failed to parse middleware");
+
+        let chain_fp = chain_graph
+            .component_exports
+            .get("wasi:http/handler@0.3.0")
+            .and_then(|e| e.fingerprint.as_ref())
+            .expect("chain should have fingerprint");
+        let mw_fp = mw_graph
+            .component_exports
+            .get("wasi:http/handler@0.3.0")
+            .and_then(|e| e.fingerprint.as_ref())
+            .expect("middleware should have fingerprint");
+
+        assert_eq!(
+            chain_fp, mw_fp,
+            "compatible chain/middleware should have equal fingerprints"
+        );
+    }
+
+    /// Parsing two components with differing function signatures must produce
+    /// different fingerprints so that `validate_contract` correctly rejects them.
+    #[test]
+    fn fingerprint_differs_between_chain_and_mw() {
+        // Chain: (param u32) -> u32
+        let chain_wat = r#"(component
+            (import "wasi:http/handler@0.3.0" (instance $host
+                (export "handle" (func (param "req" u32) (result u32)))
+            ))
+            (alias export $host "handle" (func $f))
+            (instance $out (export "handle" (func $f)))
+            (export "wasi:http/handler@0.3.0" (instance $out))
+        )"#;
+        // Incompatible middleware: different param types
+        let mw_wat = r#"(component
+            (import "wasi:http/handler@0.3.0" (instance $handler
+                (export "handle" (func (param "req" string) (result u32)))
+            ))
+            (export "wasi:http/handler@0.3.0" (instance $handler))
+        )"#;
+        let chain_bytes = wat::parse_str(chain_wat).expect("failed to parse chain WAT");
+        let mw_bytes = wat::parse_str(mw_wat).expect("failed to parse middleware WAT");
+
+        let chain_graph = parse_component(&chain_bytes).expect("failed to parse chain");
+        let mw_graph = parse_component(&mw_bytes).expect("failed to parse middleware");
+
+        let chain_fp = chain_graph
+            .component_exports
+            .get("wasi:http/handler@0.3.0")
+            .and_then(|e| e.fingerprint.as_ref())
+            .expect("chain should have fingerprint");
+        let mw_fp = mw_graph
+            .component_exports
+            .get("wasi:http/handler@0.3.0")
+            .and_then(|e| e.fingerprint.as_ref())
+            .expect("middleware should have fingerprint");
+
+        assert_ne!(
+            chain_fp, mw_fp,
+            "incompatible chain/middleware should have different fingerprints"
         );
     }
 }

@@ -613,6 +613,127 @@ impl TypeArena {
     pub fn canonical_interface(&self, id: InterfaceTypeId) -> String {
         canonical_interface(self.lookup_interface(id), self)
     }
+
+    /// Display-oriented type string for visualizations.
+    ///
+    /// Unlike [`canonical_val`], this method summarizes complex types that
+    /// would produce unreadably long strings:
+    ///
+    /// - Variants/enums/flags/records with more than [`DISPLAY_MAX_ITEMS`]
+    ///   entries are replaced by `variant{N cases}`, `record{N fields}`, etc.
+    /// - Nesting deeper than [`DISPLAY_MAX_DEPTH`] is replaced by `…`.
+    ///
+    /// Simple scalar types (bool, u32, string, resource, …) are unaffected.
+    /// Fingerprinting always uses [`canonical_val`] and is never truncated.
+    pub fn display_val(&self, id: ValueTypeId) -> String {
+        self.display_val_inner(id, 0)
+    }
+
+    fn display_val_inner(&self, id: ValueTypeId, depth: usize) -> String {
+        const MAX_DEPTH: usize = 3;
+        const MAX_ITEMS: usize = 4;
+
+        if depth > MAX_DEPTH {
+            return "…".to_string();
+        }
+
+        let next = depth + 1;
+        match self.lookup_val(id) {
+            ValueType::Map(k, v) => format!(
+                "map<{},{}>",
+                self.display_val_inner(*k, next),
+                self.display_val_inner(*v, next)
+            ),
+            ValueType::FixedSizeList(t, n) => {
+                format!("array{}<{}>", n, self.display_val_inner(*t, next))
+            }
+            ValueType::List(t) => format!("list<{}>", self.display_val_inner(*t, next)),
+            ValueType::Option(t) => format!("option<{}>", self.display_val_inner(*t, next)),
+            ValueType::Tuple(ts) => {
+                if ts.len() > MAX_ITEMS {
+                    format!("tuple({} items)", ts.len())
+                } else {
+                    format!(
+                        "tuple({})",
+                        ts.iter()
+                            .map(|t| self.display_val_inner(*t, next))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                }
+            }
+            ValueType::Record(fields) => {
+                if fields.len() > MAX_ITEMS {
+                    format!("record{{{} fields}}", fields.len())
+                } else {
+                    format!(
+                        "record{{{}}}",
+                        fields
+                            .iter()
+                            .map(|(n, t)| format!("{}:{}", n, self.display_val_inner(*t, next)))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                }
+            }
+            ValueType::Variant(cases) => {
+                if cases.len() > MAX_ITEMS {
+                    format!("variant{{{} cases}}", cases.len())
+                } else {
+                    format!(
+                        "variant{{{}}}",
+                        cases
+                            .iter()
+                            .map(|(n, t)| match t {
+                                Some(t) => {
+                                    format!("{}:{}", n, self.display_val_inner(*t, next))
+                                }
+                                None => n.clone(),
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                }
+            }
+            ValueType::Enum(names) => {
+                if names.len() > MAX_ITEMS {
+                    format!("enum{{{} cases}}", names.len())
+                } else {
+                    format!("enum{{{}}}", names.join(","))
+                }
+            }
+            ValueType::Flags(names) => {
+                if names.len() > MAX_ITEMS {
+                    format!("flags{{{} flags}}", names.len())
+                } else {
+                    format!("flags{{{}}}", names.join(","))
+                }
+            }
+            ValueType::Result { ok, err } => format!(
+                "result<{},{}>",
+                ok.map(|t| self.display_val_inner(t, next))
+                    .unwrap_or_else(|| "_".into()),
+                err.map(|t| self.display_val_inner(t, next))
+                    .unwrap_or_else(|| "_".into())
+            ),
+            ValueType::Resource => "resource".into(),
+            ValueType::AsyncHandle => "async_handle".into(),
+            ValueType::Bool => "bool".into(),
+            ValueType::S8 => "s8".into(),
+            ValueType::U8 => "u8".into(),
+            ValueType::S16 => "s16".into(),
+            ValueType::U16 => "u16".into(),
+            ValueType::S32 => "s32".into(),
+            ValueType::U32 => "u32".into(),
+            ValueType::S64 => "s64".into(),
+            ValueType::U64 => "u64".into(),
+            ValueType::F32 => "f32".into(),
+            ValueType::F64 => "f64".into(),
+            ValueType::Char => "char".into(),
+            ValueType::String => "string".into(),
+            ValueType::ErrorContext => "error-context".into(),
+        }
+    }
 }
 
 /// Extract a short interface name from a full interface path
@@ -656,5 +777,80 @@ mod tests {
         assert_eq!(short_interface_name("wasi:http/handler@0.3.0"), "handler");
         assert_eq!(short_interface_name("wasi:io/streams@0.2.0"), "streams");
         assert_eq!(short_interface_name("simple"), "simple");
+    }
+
+    #[test]
+    fn test_display_val_simple_types_unchanged() {
+        let mut arena = TypeArena::default();
+        let u32_id = arena.intern_val(ValueType::U32);
+        let str_id = arena.intern_val(ValueType::String);
+        assert_eq!(arena.display_val(u32_id), "u32");
+        assert_eq!(arena.display_val(str_id), "string");
+    }
+
+    #[test]
+    fn test_display_val_small_variant_expanded() {
+        let mut arena = TypeArena::default();
+        // 3 cases → below threshold, should be expanded
+        let v = arena.intern_val(ValueType::Variant(vec![
+            ("a".into(), None),
+            ("b".into(), None),
+            ("c".into(), None),
+        ]));
+        let s = arena.display_val(v);
+        assert!(s.starts_with("variant{"), "got: {s}");
+        assert!(s.contains("a,b,c"), "got: {s}");
+    }
+
+    #[test]
+    fn test_display_val_large_variant_summarized() {
+        let mut arena = TypeArena::default();
+        // 5 cases → above threshold (MAX_ITEMS=4), should be summarized
+        let v = arena.intern_val(ValueType::Variant(
+            (0..5).map(|i| (format!("case-{i}"), None)).collect(),
+        ));
+        let s = arena.display_val(v);
+        assert_eq!(s, "variant{5 cases}", "got: {s}");
+    }
+
+    #[test]
+    fn test_display_val_large_record_summarized() {
+        let mut arena = TypeArena::default();
+        let u32_id = arena.intern_val(ValueType::U32);
+        let v = arena.intern_val(ValueType::Record(
+            (0..6).map(|i| (format!("field-{i}"), u32_id)).collect(),
+        ));
+        let s = arena.display_val(v);
+        assert_eq!(s, "record{6 fields}", "got: {s}");
+    }
+
+    #[test]
+    fn test_display_val_result_with_summarized_err() {
+        let mut arena = TypeArena::default();
+        let res_id = arena.intern_val(ValueType::Resource);
+        // Large error variant
+        let err_id = arena.intern_val(ValueType::Variant(
+            (0..10).map(|i| (format!("e{i}"), None)).collect(),
+        ));
+        let result_id = arena.intern_val(ValueType::Result {
+            ok: Some(res_id),
+            err: Some(err_id),
+        });
+        let s = arena.display_val(result_id);
+        assert_eq!(s, "result<resource,variant{10 cases}>", "got: {s}");
+    }
+
+    #[test]
+    fn test_display_val_does_not_affect_canonical_val() {
+        // canonical_val must remain fully expanded for fingerprinting
+        let mut arena = TypeArena::default();
+        let v = arena.intern_val(ValueType::Variant(
+            (0..5).map(|i| (format!("case-{i}"), None)).collect(),
+        ));
+        let canonical = arena.canonical_val(v);
+        let display = arena.display_val(v);
+        assert_ne!(canonical, display, "canonical should be full, display should be summarized");
+        assert!(canonical.contains("case-0"), "canonical should expand all cases");
+        assert_eq!(display, "variant{5 cases}");
     }
 }

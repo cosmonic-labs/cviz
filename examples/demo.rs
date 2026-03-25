@@ -236,3 +236,117 @@ fn main() {
     println!("  Or paste into: https://mermaid.live");
     println!("{bar}");
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────────
+// Run with: cargo test --example demo   (or cargo test --all-targets)
+
+fn parse_wat(src: &str) -> cviz::model::CompositionGraph {
+    let wasm = wat::parse_str(src).expect("WAT parse failed");
+    parse::component::parse_component(&wasm).expect("component parse failed")
+}
+
+#[test]
+fn test_01_simple_chain_parses_with_two_nodes() {
+    let graph = parse_wat(WAT_01);
+    assert_eq!(graph.nodes.len(), 2, "expected 2 nodes");
+    let names: Vec<_> = graph.nodes.values().map(|n| n.display_label()).collect();
+    assert!(names.iter().any(|n| *n == "core"), "expected 'core' node");
+    assert!(names.iter().any(|n| *n == "auth"), "expected 'auth' node");
+    assert!(
+        graph.component_exports.contains_key("wasi:http/handler@0.3.0"),
+        "expected handler export"
+    );
+}
+
+#[test]
+fn test_01_ascii_output_contains_node_names() {
+    let graph = parse_wat(WAT_01);
+    let ascii = output::ascii::generate_ascii(&graph, DetailLevel::HandlerChain, true);
+    assert!(ascii.contains("core"), "ASCII should contain 'core'");
+    assert!(ascii.contains("auth"), "ASCII should contain 'auth'");
+}
+
+#[test]
+fn test_01_mermaid_output_is_non_empty() {
+    let graph = parse_wat(WAT_01);
+    let mermaid =
+        output::mermaid::generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, true);
+    assert!(!mermaid.is_empty(), "Mermaid output should be non-empty");
+    assert!(mermaid.contains("core"), "Mermaid should contain 'core'");
+}
+
+#[test]
+fn test_02_three_layer_stack_has_three_nodes() {
+    let graph = parse_wat(WAT_02);
+    assert_eq!(graph.nodes.len(), 3, "expected 3 nodes");
+    let names: Vec<_> = graph.nodes.values().map(|n| n.display_label()).collect();
+    assert!(names.iter().any(|n| *n == "core"));
+    assert!(names.iter().any(|n| *n == "auth"));
+    assert!(names.iter().any(|n| *n == "rate"));
+}
+
+#[test]
+fn test_03_multi_chain_has_four_nodes() {
+    let graph = parse_wat(WAT_03);
+    assert_eq!(graph.nodes.len(), 4, "expected 4 nodes (2 HTTP + 2 KV)");
+    let names: Vec<_> = graph.nodes.values().map(|n| n.display_label()).collect();
+    assert!(names.iter().any(|n| *n == "http-core"));
+    assert!(names.iter().any(|n| *n == "http-auth"));
+    assert!(names.iter().any(|n| *n == "kv-store"));
+    assert!(names.iter().any(|n| *n == "kv-cache"));
+}
+
+#[test]
+fn test_04_chain_plus_utility_logger_visible_in_all_interfaces() {
+    let graph = parse_wat(WAT_04);
+    // HandlerChain excludes the logger utility node
+    let ascii_hc = output::ascii::generate_ascii(&graph, DetailLevel::HandlerChain, true);
+    // AllInterfaces includes the logger
+    let ascii_all = output::ascii::generate_ascii(&graph, DetailLevel::AllInterfaces, true);
+    assert!(
+        ascii_all.contains("logger"),
+        "AllInterfaces should show 'logger'"
+    );
+    // The handler chain still contains core and auth
+    assert!(ascii_hc.contains("core"));
+    assert!(ascii_hc.contains("auth"));
+}
+
+#[test]
+fn test_05_non_http_chain_uses_messaging_interface() {
+    let graph = parse_wat(WAT_05);
+    assert_eq!(graph.nodes.len(), 2, "expected 2 nodes");
+    let names: Vec<_> = graph.nodes.values().map(|n| n.display_label()).collect();
+    assert!(names.iter().any(|n| *n == "consumer"));
+    assert!(names.iter().any(|n| *n == "filter"));
+    assert!(
+        graph
+            .component_exports
+            .contains_key("wasi:messaging/consumer@0.2.0"),
+        "expected messaging export"
+    );
+}
+
+#[test]
+fn test_06_typed_chain_export_has_fingerprint() {
+    let graph = parse_wat(WAT_06);
+    let fp = graph
+        .component_exports
+        .get("wasi:http/handler@0.3.0")
+        .and_then(|e| e.fingerprint.as_ref());
+    assert!(fp.is_some(), "typed chain export should have a fingerprint");
+}
+
+#[test]
+fn test_06_typed_chain_types_on_shows_signatures() {
+    let graph = parse_wat(WAT_06);
+    let with_types =
+        output::ascii::generate_ascii(&graph, DetailLevel::HandlerChain, true);
+    let without_types =
+        output::ascii::generate_ascii(&graph, DetailLevel::HandlerChain, false);
+    // types=on should include more content (the type key section)
+    assert!(
+        with_types.len() > without_types.len(),
+        "types=on output should be longer than types=off"
+    );
+}
