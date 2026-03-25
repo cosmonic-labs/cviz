@@ -1,6 +1,6 @@
 use crate::model::{
-    ComponentNode, CompositionGraph, ExportInfo, FuncSignature, InternedId, InstanceInterface,
-    InterfaceConnection, InterfaceType, TypeArena, ValueType, ValueTypeId,
+    ComponentNode, CompositionGraph, ExportInfo, FuncSignature, InstanceInterface,
+    InterfaceConnection, InterfaceType, InternedId, TypeArena, ValueType, ValueTypeId,
 };
 use crate::output::json::{
     FuncSignatureJson, InterfaceTypeJson, JsonCompositionGraph, JsonExport, ValueTypeJson,
@@ -110,7 +110,9 @@ fn convert_interface_type(
                 .into_iter()
                 .map(|(name, f)| Ok((name, convert_func_signature(f, arena)?)))
                 .collect::<Result<BTreeMap<_, _>, String>>()?;
-            Ok(InterfaceType::Instance(InstanceInterface { functions: funcs }))
+            Ok(InterfaceType::Instance(InstanceInterface {
+                functions: funcs,
+            }))
         }
     }
 }
@@ -169,9 +171,7 @@ fn intern_value_type(json: ValueTypeJson, arena: &mut TypeArena) -> Result<Value
         ValueTypeJson::Variant { cases } => ValueType::Variant(
             cases
                 .into_iter()
-                .map(|(n, v)| {
-                    Ok((n, v.map(|v| intern_value_type(v, arena)).transpose()?))
-                })
+                .map(|(n, v)| Ok((n, v.map(|v| intern_value_type(v, arena)).transpose()?)))
                 .collect::<Result<Vec<_>, String>>()?,
         ),
         ValueTypeJson::Enum { cases } => ValueType::Enum(cases),
@@ -192,7 +192,10 @@ fn intern_value_type(json: ValueTypeJson, arena: &mut TypeArena) -> Result<Value
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ComponentNode, FuncSignature, InstanceInterface, InterfaceConnection, InterfaceType, ValueType};
+    use crate::model::{
+        ComponentNode, FuncSignature, InstanceInterface, InterfaceConnection, InterfaceType,
+        ValueType,
+    };
     use crate::output::json::generate_json;
     use std::collections::BTreeMap;
 
@@ -306,7 +309,10 @@ mod tests {
         assert_eq!(conn.fingerprint.as_deref(), Some(fingerprint.as_str()));
 
         // Type info is present
-        let iface = conn.interface_type.as_ref().expect("interface type missing");
+        let iface = conn
+            .interface_type
+            .as_ref()
+            .expect("interface type missing");
         let InterfaceType::Instance(inst) = iface else {
             panic!("expected Instance, got {:?}", iface);
         };
@@ -320,7 +326,10 @@ mod tests {
 
         // The result type should round-trip as result<list<string>, u32>
         assert!(
-            matches!(rt.arena.lookup_val(greet.results[0]), ValueType::Result { .. }),
+            matches!(
+                rt.arena.lookup_val(greet.results[0]),
+                ValueType::Result { .. }
+            ),
             "result type should survive round-trip"
         );
 

@@ -258,18 +258,6 @@ fn generate_all_interfaces(
     output
 }
 
-// let lines = symbols.key_lines();
-//  29 -    let node_ids: Vec<String> = (0..lines.len()).map(|i| format!("k{i}")).collect();
-//  30 -    let mut out = String::from("\n    subgraph key[\"Key\"]\n");
-//  31 -    for (id, line) in node_ids.iter().zip(&lines) {
-//  32 -        out.push_str(&format!("        {id}[\"{line}\"]\n"));
-//  33 -    }
-//  34 -    out.push_str("    end\n");
-//  35 -    // Make the subgraph and its nodes look like plain text — no borders, no fill.
-//  36 -    out.push_str("    style key fill:none,stroke:none,color:#666\n");
-//  37 -    out.push_str("    classDef keyNote fill:none,stroke:none,color:#888\n");
-//  38 -    out.push_str(&format!("    class {} keyNote\n", node_ids.join(",")));
-
 /// Generate a full diagram with all details
 fn generate_full(graph: &CompositionGraph, direction: Direction, show_types: bool) -> String {
     let view = build_full_view(graph, show_types);

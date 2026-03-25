@@ -1,6 +1,5 @@
 ---
 source: src/lib/snapshot_tests.rs
-assertion_line: 299
 expression: "ascii_snap(&two_typed_chain_graph(), DetailLevel::AllInterfaces, true)"
 ---
 ┌──────────────────┐
@@ -20,9 +19,9 @@ expression: "ascii_snap(&two_typed_chain_graph(), DetailLevel::AllInterfaces, tr
 ┌───────────────────────────────────────────┐
 │                Connections                │
 ├───────────────────────────────────────────┤
-│  {handler} --- handler✦ --- [srv-http]    │
+│  {handler} --- handler✦ --> [srv-http]    │
 │  [srv-http] ── handler✦ ──> [mw-http]     │
-│  {store} --- store✧ --- [db]              │
+│  {store} --- store✧ --> [db]              │
 │  [db] ── store✧ ──> [cache]               │
 │  [mw-http] ──> (Export: handler✦)         │
 │  [cache] ──> (Export: store✧)             │

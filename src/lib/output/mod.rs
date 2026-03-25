@@ -14,11 +14,7 @@ use crate::model::{
 /// expanded in full.  Fingerprinting is unaffected — it always uses the
 /// lossless [`TypeArena::canonical_val`].
 pub(crate) fn format_func_sig(sig: &FuncSignature, arena: &TypeArena) -> String {
-    let params: Vec<String> = sig
-        .params
-        .iter()
-        .map(|id| arena.display_val(*id))
-        .collect();
+    let params: Vec<String> = sig.params.iter().map(|id| arena.display_val(*id)).collect();
     let results: Vec<String> = sig
         .results
         .iter()

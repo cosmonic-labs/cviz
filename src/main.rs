@@ -64,9 +64,8 @@ fn main() -> Result<()> {
         OutputFormat::Mermaid => {
             output::mermaid::generate_mermaid(&graph, args.detail, args.direction, args.types)
         }
-        // OutputFormat::Json => output::json::generate_json(&graph, false)?, // always generates the full graph
-        // OutputFormat::JsonPretty => output::json::generate_json(&graph, true)?, // always generates the full graph
-        _ => unimplemented!(),
+        OutputFormat::Json => output::json::generate_json(&graph, false)?, // always generates the full graph
+        OutputFormat::JsonPretty => output::json::generate_json(&graph, true)?, // always generates the full graph
     };
 
     // Output

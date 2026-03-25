@@ -37,7 +37,7 @@ pub fn parse_component(buff: &[u8]) -> Result<CompositionGraph> {
             .graph
             .component_exports
             .get(name)
-            .map_or(true, |e| e.fingerprint.is_none());
+            .is_none_or(|e| e.fingerprint.is_none());
         if needs_fill {
             if let Some(ct) = component.concretize_export(name) {
                 if let Some(it) = concrete_to_interface_type(ct, &mut visitor.graph.arena) {

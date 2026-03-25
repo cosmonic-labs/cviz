@@ -1,6 +1,5 @@
 ---
 source: src/lib/snapshot_tests.rs
-assertion_line: 105
 expression: "ascii_snap(&long_chain_graph(), DetailLevel::AllInterfaces, false)"
 ---
 ┌──────────────────┐
@@ -18,7 +17,7 @@ expression: "ascii_snap(&long_chain_graph(), DetailLevel::AllInterfaces, false)"
 ┌───────────────────────────────────────────┐
 │                Connections                │
 ├───────────────────────────────────────────┤
-│  {consumer} --- consumer --- [backend]    │
+│  {consumer} --- consumer --> [backend]    │
 │  [backend] ── consumer ──> [service]      │
 │  [service] ── consumer ──> [gateway]      │
 │  [gateway] ──> (Export: consumer)         │

@@ -849,8 +849,14 @@ mod tests {
         ));
         let canonical = arena.canonical_val(v);
         let display = arena.display_val(v);
-        assert_ne!(canonical, display, "canonical should be full, display should be summarized");
-        assert!(canonical.contains("case-0"), "canonical should expand all cases");
+        assert_ne!(
+            canonical, display,
+            "canonical should be full, display should be summarized"
+        );
+        assert!(
+            canonical.contains("case-0"),
+            "canonical should expand all cases"
+        );
         assert_eq!(display, "variant{5 cases}");
     }
 }

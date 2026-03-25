@@ -1,5 +1,5 @@
 use crate::model::{
-    CompositionGraph, FuncSignature, InternedId, InterfaceConnection, InterfaceType, TypeArena,
+    CompositionGraph, FuncSignature, InterfaceConnection, InterfaceType, InternedId, TypeArena,
     ValueType, ValueTypeId,
 };
 use serde::{Deserialize, Serialize};
@@ -42,9 +42,10 @@ fn generate_json_model(graph: &CompositionGraph) -> JsonCompositionGraph {
             source_instance: info.source_instance,
             fingerprint: info.fingerprint.clone(),
             interface_type: match &info.ty {
-                Some(InternedId::Interface(id)) => {
-                    Some(InterfaceTypeJson::from_ir(arena.lookup_interface(*id), arena))
-                }
+                Some(InternedId::Interface(id)) => Some(InterfaceTypeJson::from_ir(
+                    arena.lookup_interface(*id),
+                    arena,
+                )),
                 _ => None,
             },
         })
@@ -185,14 +186,31 @@ pub enum ValueTypeJson {
     ErrorContext,
     Resource,
     AsyncHandle,
-    List { elem: Box<ValueTypeJson> },
-    FixedSizeList { elem: Box<ValueTypeJson>, size: u32 },
-    Tuple { items: Vec<ValueTypeJson> },
-    Record { fields: Vec<(std::string::String, ValueTypeJson)> },
-    Variant { cases: Vec<(std::string::String, Option<ValueTypeJson>)> },
-    Enum { cases: Vec<std::string::String> },
-    Flags { names: Vec<std::string::String> },
-    Option { some: Box<ValueTypeJson> },
+    List {
+        elem: Box<ValueTypeJson>,
+    },
+    FixedSizeList {
+        elem: Box<ValueTypeJson>,
+        size: u32,
+    },
+    Tuple {
+        items: Vec<ValueTypeJson>,
+    },
+    Record {
+        fields: Vec<(std::string::String, ValueTypeJson)>,
+    },
+    Variant {
+        cases: Vec<(std::string::String, Option<ValueTypeJson>)>,
+    },
+    Enum {
+        cases: Vec<std::string::String>,
+    },
+    Flags {
+        names: Vec<std::string::String>,
+    },
+    Option {
+        some: Box<ValueTypeJson>,
+    },
     Result {
         ok: Option<Box<ValueTypeJson>>,
         err: Option<Box<ValueTypeJson>>,
@@ -230,7 +248,10 @@ impl ValueTypeJson {
                 size: *n,
             },
             ValueType::Tuple(items) => ValueTypeJson::Tuple {
-                items: items.iter().map(|&t| ValueTypeJson::from_ir(t, arena)).collect(),
+                items: items
+                    .iter()
+                    .map(|&t| ValueTypeJson::from_ir(t, arena))
+                    .collect(),
             },
             ValueType::Record(fields) => ValueTypeJson::Record {
                 fields: fields
@@ -244,8 +265,12 @@ impl ValueTypeJson {
                     .map(|(n, t)| (n.clone(), t.map(|t| ValueTypeJson::from_ir(t, arena))))
                     .collect(),
             },
-            ValueType::Enum(names) => ValueTypeJson::Enum { cases: names.clone() },
-            ValueType::Flags(names) => ValueTypeJson::Flags { names: names.clone() },
+            ValueType::Enum(names) => ValueTypeJson::Enum {
+                cases: names.clone(),
+            },
+            ValueType::Flags(names) => ValueTypeJson::Flags {
+                names: names.clone(),
+            },
             ValueType::Option(inner) => ValueTypeJson::Option {
                 some: Box::new(ValueTypeJson::from_ir(*inner, arena)),
             },

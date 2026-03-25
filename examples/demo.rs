@@ -1,4 +1,4 @@
-//! Demo: cviz visualization across six composition topologies.
+//! Demo: cviz visualization across different composition topologies.
 //!
 //! Compiles WAT fixture files at runtime (using the `wat` crate) and runs the
 //! cviz visualizer on each with several flag combinations.
@@ -240,6 +240,7 @@ fn main() {
 // ─── Tests ────────────────────────────────────────────────────────────────
 // Run with: cargo test --example demo   (or cargo test --all-targets)
 
+#[allow(dead_code)]
 fn parse_wat(src: &str) -> cviz::model::CompositionGraph {
     let wasm = wat::parse_str(src).expect("WAT parse failed");
     parse::component::parse_component(&wasm).expect("component parse failed")
@@ -253,7 +254,9 @@ fn test_01_simple_chain_parses_with_two_nodes() {
     assert!(names.iter().any(|n| *n == "core"), "expected 'core' node");
     assert!(names.iter().any(|n| *n == "auth"), "expected 'auth' node");
     assert!(
-        graph.component_exports.contains_key("wasi:http/handler@0.3.0"),
+        graph
+            .component_exports
+            .contains_key("wasi:http/handler@0.3.0"),
         "expected handler export"
     );
 }
@@ -269,8 +272,12 @@ fn test_01_ascii_output_contains_node_names() {
 #[test]
 fn test_01_mermaid_output_is_non_empty() {
     let graph = parse_wat(WAT_01);
-    let mermaid =
-        output::mermaid::generate_mermaid(&graph, DetailLevel::HandlerChain, Direction::LeftToRight, true);
+    let mermaid = output::mermaid::generate_mermaid(
+        &graph,
+        DetailLevel::HandlerChain,
+        Direction::LeftToRight,
+        true,
+    );
     assert!(!mermaid.is_empty(), "Mermaid output should be non-empty");
     assert!(mermaid.contains("core"), "Mermaid should contain 'core'");
 }
@@ -340,10 +347,8 @@ fn test_06_typed_chain_export_has_fingerprint() {
 #[test]
 fn test_06_typed_chain_types_on_shows_signatures() {
     let graph = parse_wat(WAT_06);
-    let with_types =
-        output::ascii::generate_ascii(&graph, DetailLevel::HandlerChain, true);
-    let without_types =
-        output::ascii::generate_ascii(&graph, DetailLevel::HandlerChain, false);
+    let with_types = output::ascii::generate_ascii(&graph, DetailLevel::HandlerChain, true);
+    let without_types = output::ascii::generate_ascii(&graph, DetailLevel::HandlerChain, false);
     // types=on should include more content (the type key section)
     assert!(
         with_types.len() > without_types.len(),

@@ -135,7 +135,7 @@ fn generate_all_interfaces_ascii(graph: &CompositionGraph, show_types: bool) -> 
         );
         if edge.is_dashed {
             connection_lines.push(format!(
-                "  {{{}}} --- {}{} --- [{}]",
+                "  {{{}}} --- {}{} --> [{}]",
                 edge.from_display, edge.label, sym, edge.to_display
             ));
         } else {
@@ -706,7 +706,7 @@ mod tests {
         // Host import edges use dashed style with braces for the interface name.
         // $srv imports handler directly from the host.
         assert!(
-            output.contains("{handler} --- handler --- [srv]"),
+            output.contains("{handler} --- handler --> [srv]"),
             "host edge should use dashed format, got:\n{}",
             output
         );

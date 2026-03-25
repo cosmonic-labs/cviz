@@ -1,6 +1,5 @@
 ---
 source: src/lib/snapshot_tests.rs
-assertion_line: 207
 expression: "ascii_snap(&typed_chain_graph(), DetailLevel::AllInterfaces, true)"
 ---
 ┌──────────────────┐
@@ -17,7 +16,7 @@ expression: "ascii_snap(&typed_chain_graph(), DetailLevel::AllInterfaces, true)"
 ┌─────────────────────────────────────────┐
 │               Connections               │
 ├─────────────────────────────────────────┤
-│  {handler} --- handler✦ --- [srv]       │
+│  {handler} --- handler✦ --> [srv]       │
 │  [srv] ── handler✦ ──> [middleware]     │
 │  [middleware] ──> (Export: handler✦)    │
 │                                         │
