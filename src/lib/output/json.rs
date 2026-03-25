@@ -52,7 +52,7 @@ fn generate_json_model(graph: &CompositionGraph) -> JsonCompositionGraph {
         .collect();
 
     JsonCompositionGraph {
-        version: 1,
+        version: 2,
         nodes,
         exports,
     }
