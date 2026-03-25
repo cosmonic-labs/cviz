@@ -1,0 +1,11 @@
+---
+source: src/lib/snapshot_tests.rs
+assertion_line: 134
+expression: "ascii_snap(&chain_plus_utility_graph(), DetailLevel::HandlerChain, false)"
+---
+┌────────────────────────────────────┐
+│           Service Chains           │
+├────────────────────────────────────┤
+│[Export: handler] ──> middleware    │
+│middleware ── handler ──> srv       │
+└────────────────────────────────────┘

@@ -26,6 +26,10 @@ struct Args {
     #[arg(short = 'l', long, default_value = "handler-chain", value_parser = parse_detail)]
     detail: DetailLevel,
 
+    /// Show WIT type information on interface connections
+    #[arg(short = 't', long, default_value = "true")]
+    types: bool,
+
     /// Output file (stdout if not specified)
     #[arg(short, long)]
     output: Option<PathBuf>,
@@ -56,9 +60,9 @@ fn main() -> Result<()> {
 
     // Generate the diagram based on format
     let diagram = match args.format {
-        OutputFormat::Ascii => output::ascii::generate_ascii(&graph, args.detail),
+        OutputFormat::Ascii => output::ascii::generate_ascii(&graph, args.detail, args.types),
         OutputFormat::Mermaid => {
-            output::mermaid::generate_mermaid(&graph, args.detail, args.direction)
+            output::mermaid::generate_mermaid(&graph, args.detail, args.direction, args.types)
         }
         OutputFormat::Json => output::json::generate_json(&graph, false)?, // always generates the full graph
         OutputFormat::JsonPretty => output::json::generate_json(&graph, true)?, // always generates the full graph

@@ -1,0 +1,12 @@
+%%{init: {'flowchart': {'wrappingWidth': 600}}}%%
+graph LR
+    subgraph composition["Service Chains"]
+        auth["auth"]
+        core["core"]
+    end
+
+    export_wasi_http_handler_0_3_0(["Export: handler"]) --> auth
+    auth -->|"handler✦"| core
+
+    key["Key\n✦ `handle`: () -> ()"]
+    style key fill:none,stroke:none,text-align:left,color:#888
