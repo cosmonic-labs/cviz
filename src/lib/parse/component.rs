@@ -15,6 +15,38 @@ use wirm::wasmparser::{
 };
 use wirm::Component;
 
+/// Parse the top-level interface (instance-kind) imports of a plain Wasm component.
+///
+/// Returns one `(interface_name, fingerprint)` pair for every `instance`-kind import
+/// found in the component's import section.  The fingerprint is derived from the
+/// concrete type of the import and can be used for structural type-compatibility checks.
+/// `fingerprint` is `None` when the type cannot be concretised (rare).
+///
+/// Other import kinds (functions, modules, types) are ignored.
+///
+/// This is the counterpart to [`parse_component`] for extracting the *import* surface of
+/// a component that has not yet been composed with its dependencies.
+pub fn parse_component_imports(buff: &[u8]) -> Result<Vec<(String, Option<String>)>> {
+    use wirm::wasmparser::ComponentTypeRef;
+
+    let component = Component::parse(buff, false, false).expect("Unable to parse");
+    let mut arena = crate::model::TypeArena::default();
+    let mut imports = Vec::new();
+
+    for import in component.imports.iter() {
+        if let ComponentTypeRef::Instance(_) = import.ty {
+            let name = import.name.0.to_string();
+            let fingerprint = component
+                .concretize_import(&name)
+                .and_then(|ct| concrete_to_interface_type(ct, &mut arena))
+                .map(|it| it.fingerprint(&arena));
+            imports.push((name, fingerprint));
+        }
+    }
+
+    Ok(imports)
+}
+
 /// Parse a WebAssembly component file and extract its composition graph
 pub fn parse_component(buff: &[u8]) -> Result<CompositionGraph> {
     let component = Component::parse(buff, false, false).expect("Unable to parse");
