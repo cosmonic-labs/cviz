@@ -302,7 +302,7 @@ pub(crate) fn build_all_interfaces_view(
                     fingerprint: import.fingerprint.clone(),
                     is_dashed: true,
                 });
-            } else if let Some(src) = graph.get_node(import.source_instance) {
+            } else if let Some(src) = import.source_instance.and_then(|id| graph.get_node(id)) {
                 if src.component_index != SYNTHETIC_COMPONENT {
                     edges.push(DiagramEdge {
                         from_name: src.name.clone(),
@@ -363,7 +363,7 @@ pub(crate) fn build_full_view(graph: &CompositionGraph, show_types: bool) -> Con
     for node in graph.nodes.values() {
         for import in &node.imports {
             if !import.is_host_import {
-                if let Some(src) = graph.get_node(import.source_instance) {
+                if let Some(src) = import.source_instance.and_then(|id| graph.get_node(id)) {
                     edges.push(DiagramEdge {
                         from_name: src.name.clone(),
                         from_display: src.display_label().to_string(),
@@ -623,7 +623,7 @@ mod tests {
         let arena = make_arena();
         let conn = InterfaceConnection {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: 0,
+            source_instance: None,
             is_host_import: true,
             interface_type: None, // no type info
             fingerprint: None,
@@ -745,7 +745,7 @@ mod tests {
         let mut real = ComponentNode::new("$real".to_string(), 0, 0);
         real.add_import(InterfaceConnection {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: 99, // will be a synthetic node
+            source_instance: Some(99), // will be a synthetic node
             is_host_import: false,
             interface_type: None,
             fingerprint: None,
@@ -863,7 +863,7 @@ mod tests {
         let mut a = ComponentNode::new("$a".to_string(), 0, 0);
         a.add_import(InterfaceConnection {
             interface_name: "wasi:logging/log@0.1.0".to_string(),
-            source_instance: 0,
+            source_instance: None,
             is_host_import: true,
             interface_type: None,
             fingerprint: None,
@@ -873,7 +873,7 @@ mod tests {
         let mut b = ComponentNode::new("$b".to_string(), 1, 1);
         b.add_import(InterfaceConnection {
             interface_name: "wasi:logging/log@0.1.0".to_string(),
-            source_instance: 0,
+            source_instance: None,
             is_host_import: true,
             interface_type: None,
             fingerprint: None,

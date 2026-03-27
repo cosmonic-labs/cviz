@@ -29,7 +29,7 @@ pub(crate) fn simple_chain_graph() -> CompositionGraph {
     let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
     srv.add_import(InterfaceConnection {
         interface_name: "wasi:http/handler@0.3.0".to_string(),
-        source_instance: 0,
+        source_instance: None,
         is_host_import: true,
         interface_type: None,
         fingerprint: None,
@@ -39,14 +39,14 @@ pub(crate) fn simple_chain_graph() -> CompositionGraph {
     let mut mw = ComponentNode::new("$middleware".to_string(), 1, 1);
     mw.add_import(InterfaceConnection {
         interface_name: "wasi:http/handler@0.3.0".to_string(),
-        source_instance: 1,
+        source_instance: Some(1),
         is_host_import: false,
         interface_type: None,
         fingerprint: None,
     });
     mw.add_import(InterfaceConnection {
         interface_name: "wasi:logging/log@0.1.0".to_string(),
-        source_instance: 0,
+        source_instance: None,
         is_host_import: true,
         interface_type: None,
         fingerprint: None,
@@ -75,7 +75,7 @@ pub(crate) fn two_chain_graph() -> CompositionGraph {
     let mut srv_http = ComponentNode::new("$srv-http".to_string(), 0, 0);
     srv_http.add_import(InterfaceConnection {
         interface_name: "wasi:http/handler@0.3.0".to_string(),
-        source_instance: 0,
+        source_instance: None,
         is_host_import: true,
         interface_type: None,
         fingerprint: None,
@@ -85,7 +85,7 @@ pub(crate) fn two_chain_graph() -> CompositionGraph {
     let mut mw_http = ComponentNode::new("$mw-http".to_string(), 1, 1);
     mw_http.add_import(InterfaceConnection {
         interface_name: "wasi:http/handler@0.3.0".to_string(),
-        source_instance: 1,
+        source_instance: Some(1),
         is_host_import: false,
         interface_type: None,
         fingerprint: None,
@@ -98,7 +98,7 @@ pub(crate) fn two_chain_graph() -> CompositionGraph {
     let mut db = ComponentNode::new("$db".to_string(), 2, 2);
     db.add_import(InterfaceConnection {
         interface_name: "wasi:keyvalue/store@0.1.0".to_string(),
-        source_instance: 0,
+        source_instance: None,
         is_host_import: true,
         interface_type: None,
         fingerprint: None,
@@ -108,7 +108,7 @@ pub(crate) fn two_chain_graph() -> CompositionGraph {
     let mut cache = ComponentNode::new("$cache".to_string(), 3, 3);
     cache.add_import(InterfaceConnection {
         interface_name: "wasi:keyvalue/store@0.1.0".to_string(),
-        source_instance: 3,
+        source_instance: Some(3),
         is_host_import: false,
         interface_type: None,
         fingerprint: None,
@@ -137,7 +137,7 @@ pub(crate) fn long_chain_graph() -> CompositionGraph {
     let mut backend = ComponentNode::new("$backend".to_string(), 0, 0);
     backend.add_import(InterfaceConnection {
         interface_name: "wasi:messaging/consumer@0.2.0".to_string(),
-        source_instance: 0,
+        source_instance: None,
         is_host_import: true,
         interface_type: None,
         fingerprint: None,
@@ -147,7 +147,7 @@ pub(crate) fn long_chain_graph() -> CompositionGraph {
     let mut service = ComponentNode::new("$service".to_string(), 1, 1);
     service.add_import(InterfaceConnection {
         interface_name: "wasi:messaging/consumer@0.2.0".to_string(),
-        source_instance: 1,
+        source_instance: Some(1),
         is_host_import: false,
         interface_type: None,
         fingerprint: None,
@@ -157,7 +157,7 @@ pub(crate) fn long_chain_graph() -> CompositionGraph {
     let mut gateway = ComponentNode::new("$gateway".to_string(), 2, 2);
     gateway.add_import(InterfaceConnection {
         interface_name: "wasi:messaging/consumer@0.2.0".to_string(),
-        source_instance: 2,
+        source_instance: Some(2),
         is_host_import: false,
         interface_type: None,
         fingerprint: None,
@@ -185,7 +185,7 @@ pub(crate) fn chain_plus_utility_graph() -> CompositionGraph {
     let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
     srv.add_import(InterfaceConnection {
         interface_name: "wasi:http/handler@0.3.0".to_string(),
-        source_instance: 0,
+        source_instance: None,
         is_host_import: true,
         interface_type: None,
         fingerprint: None,
@@ -195,7 +195,7 @@ pub(crate) fn chain_plus_utility_graph() -> CompositionGraph {
     let mut mw = ComponentNode::new("$middleware".to_string(), 1, 1);
     mw.add_import(InterfaceConnection {
         interface_name: "wasi:http/handler@0.3.0".to_string(),
-        source_instance: 1,
+        source_instance: Some(1),
         is_host_import: false,
         interface_type: None,
         fingerprint: None,
@@ -205,7 +205,7 @@ pub(crate) fn chain_plus_utility_graph() -> CompositionGraph {
     let mut logger = ComponentNode::new("$logger".to_string(), 2, 2);
     logger.add_import(InterfaceConnection {
         interface_name: "wasi:logging/log@0.1.0".to_string(),
-        source_instance: 0,
+        source_instance: None,
         is_host_import: true,
         interface_type: None,
         fingerprint: None,
@@ -239,7 +239,7 @@ pub(crate) fn typed_chain_graph() -> CompositionGraph {
     let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
     srv.add_import(InterfaceConnection {
         interface_name: "wasi:http/handler@0.3.0".to_string(),
-        source_instance: 0,
+        source_instance: None,
         is_host_import: true,
         interface_type: Some(iface_type.clone()),
         fingerprint: Some(iface_type.fingerprint(&graph.arena)),
@@ -249,7 +249,7 @@ pub(crate) fn typed_chain_graph() -> CompositionGraph {
     let mut mw = ComponentNode::new("$middleware".to_string(), 1, 1);
     mw.add_import(InterfaceConnection {
         interface_name: "wasi:http/handler@0.3.0".to_string(),
-        source_instance: 1,
+        source_instance: Some(1),
         is_host_import: false,
         interface_type: Some(iface_type.clone()),
         fingerprint: Some(iface_type.fingerprint(&graph.arena)),
@@ -295,7 +295,7 @@ pub(crate) fn two_typed_chain_graph() -> CompositionGraph {
     let mut srv_http = ComponentNode::new("$srv-http".to_string(), 0, 0);
     srv_http.add_import(InterfaceConnection {
         interface_name: "wasi:http/handler@0.3.0".to_string(),
-        source_instance: 0,
+        source_instance: None,
         is_host_import: true,
         interface_type: Some(handler_type.clone()),
         fingerprint: Some(handler_type.fingerprint(&graph.arena)),
@@ -305,7 +305,7 @@ pub(crate) fn two_typed_chain_graph() -> CompositionGraph {
     let mut mw_http = ComponentNode::new("$mw-http".to_string(), 1, 1);
     mw_http.add_import(InterfaceConnection {
         interface_name: "wasi:http/handler@0.3.0".to_string(),
-        source_instance: 1,
+        source_instance: Some(1),
         is_host_import: false,
         interface_type: Some(handler_type.clone()),
         fingerprint: Some(handler_type.fingerprint(&graph.arena)),
@@ -318,7 +318,7 @@ pub(crate) fn two_typed_chain_graph() -> CompositionGraph {
     let mut db = ComponentNode::new("$db".to_string(), 2, 2);
     db.add_import(InterfaceConnection {
         interface_name: "wasi:keyvalue/store@0.1.0".to_string(),
-        source_instance: 0,
+        source_instance: None,
         is_host_import: true,
         interface_type: Some(kv_type.clone()),
         fingerprint: Some(kv_type.fingerprint(&graph.arena)),
@@ -328,7 +328,7 @@ pub(crate) fn two_typed_chain_graph() -> CompositionGraph {
     let mut cache = ComponentNode::new("$cache".to_string(), 3, 3);
     cache.add_import(InterfaceConnection {
         interface_name: "wasi:keyvalue/store@0.1.0".to_string(),
-        source_instance: 3,
+        source_instance: Some(3),
         is_host_import: false,
         interface_type: Some(kv_type.clone()),
         fingerprint: Some(kv_type.fingerprint(&graph.arena)),

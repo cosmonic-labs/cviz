@@ -63,7 +63,7 @@ pub fn get_chain_for(graph: &CompositionGraph, interface_name: &str) -> Vec<u32>
 
     if let Some(start) = export_instance {
         // Walk from export through the chain following handler imports
-        let mut current = Some((start, false));
+        let mut current: Option<(u32, bool)> = Some((start, false));
 
         let mut visited = std::collections::HashSet::new();
 
@@ -79,7 +79,7 @@ pub fn get_chain_for(graph: &CompositionGraph, interface_name: &str) -> Vec<u32>
                 node.imports
                     .iter()
                     .find(|conn| is_connection_for(conn, interface_name) && !conn.is_host_import)
-                    .map(|conn| (conn.source_instance, conn.is_host_import))
+                    .and_then(|conn| conn.source_instance.map(|src| (src, conn.is_host_import)))
             });
         }
     }
@@ -162,7 +162,7 @@ mod tests {
         let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
         srv.add_import(InterfaceConnection {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: 0,
+            source_instance: None,
             is_host_import: true,
             interface_type: None,
             fingerprint: None,
@@ -198,7 +198,7 @@ mod tests {
         let mut a = ComponentNode::new("$a".to_string(), 0, 0);
         a.add_import(InterfaceConnection {
             interface_name: "test:iface/foo@0.1.0".to_string(),
-            source_instance: 2,
+            source_instance: Some(2),
             is_host_import: false,
             interface_type: None,
             fingerprint: None,
@@ -208,7 +208,7 @@ mod tests {
         let mut b = ComponentNode::new("$b".to_string(), 1, 1);
         b.add_import(InterfaceConnection {
             interface_name: "test:iface/foo@0.1.0".to_string(),
-            source_instance: 1,
+            source_instance: Some(1),
             is_host_import: false,
             interface_type: None,
             fingerprint: None,

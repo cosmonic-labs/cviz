@@ -309,7 +309,7 @@ mod tests {
         let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
         srv.add_import(InterfaceConnection {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: 0,
+            source_instance: None,
             is_host_import: true,
             interface_type: None,
             fingerprint: None,
@@ -319,14 +319,14 @@ mod tests {
         let mut mw = ComponentNode::new("$middleware".to_string(), 1, 1);
         mw.add_import(InterfaceConnection {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: 1,
+            source_instance: Some(1),
             is_host_import: false,
             interface_type: None,
             fingerprint: None,
         });
         mw.add_import(InterfaceConnection {
             interface_name: "wasi:logging/log@0.1.0".to_string(),
-            source_instance: 0,
+            source_instance: None,
             is_host_import: true,
             interface_type: None,
             fingerprint: None,
@@ -359,7 +359,7 @@ mod tests {
         let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
         srv.add_import(InterfaceConnection {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: 0,
+            source_instance: None,
             is_host_import: true,
             interface_type: Some(iface_type.clone()),
             fingerprint: Some(iface_type.fingerprint(&graph.arena)),
@@ -369,7 +369,7 @@ mod tests {
         let mut mw = ComponentNode::new("$middleware".to_string(), 1, 1);
         mw.add_import(InterfaceConnection {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: 1,
+            source_instance: Some(1),
             is_host_import: false,
             interface_type: Some(iface_type.clone()),
             fingerprint: Some(iface_type.fingerprint(&graph.arena)),
