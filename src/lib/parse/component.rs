@@ -100,13 +100,19 @@ impl Visitor {
         }
     }
     pub fn postprocess(&mut self) {
-        // Mark host imports on the connections
-        // Imports that aren't from a node inside the component graph are actually imported from the host.
-        let all_node_inst_ids = self.graph.nodes.keys().copied().collect::<Vec<_>>();
+        // Mark host imports on the connections.
+        // Any import whose source_instance is not a known graph node (or is None)
+        // is provided by the host rather than another composed instance.
+        let all_node_inst_ids: std::collections::HashSet<u32> =
+            self.graph.nodes.keys().copied().collect();
         for node in self.graph.nodes.values_mut() {
             for import in &mut node.imports {
-                if !all_node_inst_ids.contains(&import.source_instance) {
+                if !import
+                    .source_instance
+                    .is_some_and(|id| all_node_inst_ids.contains(&id))
+                {
                     import.is_host_import = true;
+                    import.source_instance = None;
                 }
             }
         }
@@ -166,17 +172,19 @@ impl ComponentVisitor<'_> for Visitor {
                         ResolvedItem::CompInst(inst_id, _) => {
                             let connection = InterfaceConnection::from_instance(
                                 interface_name,
-                                inst_id,
+                                Some(inst_id),
                                 interface_type,
                                 &self.graph.arena,
                             );
                             node.add_import(connection);
                         }
-                        ResolvedItem::Import(id, imp) => {
+                        ResolvedItem::Import(_id, imp) => {
+                            // This arg is satisfied by the host (component import section),
+                            // not by another composed instance — always a host import.
                             if let ComponentTypeRef::Instance(_) = imp.ty {
                                 let connection = InterfaceConnection::from_instance(
                                     interface_name,
-                                    id,
+                                    None,
                                     interface_type,
                                     &self.graph.arena,
                                 );
@@ -352,7 +360,7 @@ fn resolve_inst_alias(
         ResolvedItem::CompInst(inst_id, _) => {
             let connection = InterfaceConnection::from_instance(
                 interface_name.to_string(),
-                inst_id,
+                Some(inst_id),
                 interface_type,
                 arena,
             );
@@ -503,7 +511,8 @@ mod tests {
             .find(|i| is_connection_for(i, http_interface))
             .unwrap();
         assert_eq!(
-            first_handler.source_instance, chain[1],
+            first_handler.source_instance.unwrap(),
+            chain[1],
             "first node's handler source should be the last chain node"
         );
     }

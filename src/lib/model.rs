@@ -108,7 +108,7 @@ pub struct InterfaceConnection {
     ///
     /// This corresponds to the key of another [`ComponentNode`] in the
     /// [`CompositionGraph::nodes`] map.
-    pub source_instance: u32,
+    pub source_instance: Option<u32>,
 
     /// Whether this interface is provided by the host rather than another
     /// component instance.
@@ -140,7 +140,7 @@ pub struct InterfaceConnection {
 impl InterfaceConnection {
     pub fn from_instance(
         interface_name: String,
-        source_instance: u32,
+        source_instance: Option<u32>,
         interface_type: Option<InterfaceType>,
         arena: &TypeArena,
     ) -> Self {
@@ -389,13 +389,24 @@ impl CompositionGraph {
     pub fn new() -> Self {
         Self::default()
     }
+    pub fn new_with(
+        nodes: BTreeMap<u32, ComponentNode>,
+        component_exports: BTreeMap<String, ExportInfo>,
+        arena: TypeArena,
+    ) -> Self {
+        Self {
+            nodes,
+            component_exports,
+            arena,
+        }
+    }
 
     pub fn add_node(&mut self, instance_index: u32, node: ComponentNode) {
         self.nodes.insert(instance_index, node);
     }
 
-    pub fn get_node(&self, instance_index: u32) -> Option<&ComponentNode> {
-        self.nodes.get(&instance_index)
+    pub fn get_node(&self, id: u32) -> Option<&ComponentNode> {
+        self.nodes.get(&id)
     }
 
     pub fn add_export(
@@ -468,13 +479,16 @@ impl CompositionGraph {
                 if conn.is_host_import {
                     continue;
                 }
-                let src = conn.source_instance;
-                if !self.nodes.contains_key(&src) {
-                    return Err(format!(
-                        "Instance {} imports from unknown instance {}",
-                        id, src
-                    ));
-                }
+                if let Some(inst) = conn.source_instance {
+                    if !self.nodes.contains_key(&inst) {
+                        return Err(format!(
+                            "Instance {} imports from unknown instance {}",
+                            id, inst
+                        ));
+                    }
+                } else {
+                    return Err(format!("Instance {} imports from unknown instance", id));
+                };
             }
         }
 
@@ -757,7 +771,7 @@ mod tests {
     fn test_interface_short_label() {
         let conn = InterfaceConnection::from_instance(
             "wasi:http/handler@0.3.0-rc-2026-01-06".to_string(),
-            0,
+            Some(0),
             None,
             &TypeArena::default(),
         );
@@ -765,7 +779,7 @@ mod tests {
 
         let conn2 = InterfaceConnection::from_instance(
             "wasi:io/streams@0.2.0".to_string(),
-            1,
+            Some(1),
             None,
             &TypeArena::default(),
         );

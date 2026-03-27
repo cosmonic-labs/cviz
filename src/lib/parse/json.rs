@@ -74,11 +74,7 @@ impl CompositionGraph {
             component_exports.insert(iface_name, info);
         }
 
-        Ok(CompositionGraph {
-            nodes,
-            component_exports,
-            arena,
-        })
+        Ok(CompositionGraph::new_with(nodes, component_exports, arena))
     }
 }
 
@@ -212,7 +208,7 @@ mod tests {
         let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
         srv.add_import(InterfaceConnection {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: 0,
+            source_instance: None,
             is_host_import: true,
             interface_type: None,
             fingerprint: None,
@@ -222,7 +218,7 @@ mod tests {
         let mut mw = ComponentNode::new("$middleware".to_string(), 1, 1);
         mw.add_import(InterfaceConnection {
             interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: 1,
+            source_instance: Some(1),
             is_host_import: false,
             interface_type: None,
             fingerprint: None,
@@ -246,7 +242,7 @@ mod tests {
         let mw = rt.nodes.get(&2).expect("node 2 missing");
         assert_eq!(mw.imports.len(), 1);
         assert!(!mw.imports[0].is_host_import);
-        assert_eq!(mw.imports[0].source_instance, 1);
+        assert_eq!(mw.imports[0].source_instance, Some(1));
 
         assert!(rt.component_exports.contains_key("wasi:http/handler@0.3.0"));
     }
@@ -293,7 +289,7 @@ mod tests {
         let mut node = ComponentNode::new("$svc".to_string(), 0, 0);
         node.add_import(InterfaceConnection {
             interface_name: "my:pkg/api".to_string(),
-            source_instance: 0,
+            source_instance: None,
             is_host_import: true,
             interface_type: Some(iface),
             fingerprint: Some(fingerprint.clone()),
