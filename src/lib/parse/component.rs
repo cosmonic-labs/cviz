@@ -90,6 +90,16 @@ struct Visitor {
     curr_comp_num: u32,
     comp_id_to_num: Vec<HashMap<u32, u32>>,
     graph: CompositionGraph,
+    /// Sequential graph ID counter — each visited `Instantiate` gets the next value.
+    next_graph_id: u32,
+    /// Maps the raw pointer address of a `ComponentInstance` to its sequential graph ID.
+    ///
+    /// wirm gives us a stable `&ComponentInstance` reference both when visiting an
+    /// instance (`visit_comp_instance`) and when resolving a reference to it later
+    /// (`cx.resolve → ResolvedItem::CompInst(_, inst)`).  Using the pointer as a
+    /// scope-independent identity lets us correctly correlate inner-scope shim
+    /// instances across scope boundaries.
+    inst_ptr_to_graph_id: HashMap<usize, u32>,
 }
 impl Visitor {
     pub fn new() -> Self {
@@ -97,6 +107,8 @@ impl Visitor {
             curr_comp_num: 0,
             comp_id_to_num: Vec::new(),
             graph: CompositionGraph::new(),
+            next_graph_id: 0,
+            inst_ptr_to_graph_id: HashMap::new(),
         }
     }
     pub fn postprocess(&mut self) {
@@ -159,6 +171,13 @@ impl ComponentVisitor<'_> for Visitor {
                 let comp_num = self.comp_id_to_num.last().unwrap()[component_index];
                 let mut node = ComponentNode::new(name, *component_index, comp_num);
 
+                // Assign a sequential graph ID and register the ptr→id mapping so
+                // that later cx.resolve() calls returning this instance can find it.
+                let graph_id = self.next_graph_id;
+                self.next_graph_id += 1;
+                self.inst_ptr_to_graph_id
+                    .insert(instance as *const ComponentInstance as usize, graph_id);
+
                 // Process the "with" arguments - these are the interface connections
                 for arg in args.iter() {
                     let interface_name = arg.name.to_string();
@@ -169,10 +188,14 @@ impl ComponentVisitor<'_> for Visitor {
                     // It might be an alias, so resolve it to the actual source instance
                     let item = cx.resolve(&arg.get_item_ref().ref_);
                     match item {
-                        ResolvedItem::CompInst(inst_id, _) => {
+                        ResolvedItem::CompInst(_, inst) => {
+                            let source = self
+                                .inst_ptr_to_graph_id
+                                .get(&(inst as *const ComponentInstance as usize))
+                                .copied();
                             let connection = InterfaceConnection::from_instance(
                                 interface_name,
-                                Some(inst_id),
+                                source,
                                 interface_type,
                                 &self.graph.arena,
                             );
@@ -198,6 +221,7 @@ impl ComponentVisitor<'_> for Visitor {
                                 &interface_name,
                                 interface_type,
                                 &mut node,
+                                &self.inst_ptr_to_graph_id,
                                 &self.graph.arena,
                             );
                         }
@@ -205,7 +229,7 @@ impl ComponentVisitor<'_> for Visitor {
                     }
                 }
 
-                self.graph.add_node(id, node);
+                self.graph.add_node(graph_id, node);
             }
             ComponentInstance::FromExports(_) => {
                 // This is a synthetic instance created from exports
@@ -220,13 +244,18 @@ impl ComponentVisitor<'_> for Visitor {
 
         // Only track instance exports
         match item {
-            ResolvedItem::CompInst(inst_id, inst) => {
-                let iface_type =
-                    pull_export_type_from_instance(&export_name, inst, &mut self.graph, cx);
-                self.graph.add_export(export_name, inst_id, iface_type);
+            ResolvedItem::CompInst(_, inst) => {
+                let ptr = inst as *const ComponentInstance as usize;
+                if let Some(&graph_id) = self.inst_ptr_to_graph_id.get(&ptr) {
+                    let iface_type =
+                        pull_export_type_from_instance(&export_name, inst, &mut self.graph, cx);
+                    self.graph.add_export(export_name, graph_id, iface_type);
+                }
             }
             ResolvedItem::Alias(_, alias) => {
-                resolve_imp_alias(cx, alias, &export_name, &mut self.graph);
+                let graph = &mut self.graph;
+                let ptr_map = &self.inst_ptr_to_graph_id;
+                resolve_imp_alias(cx, alias, &export_name, graph, ptr_map);
             }
             _ => {}
         }
@@ -352,15 +381,19 @@ fn resolve_inst_alias(
     interface_name: &str,
     interface_type: Option<InterfaceType>,
     node: &mut ComponentNode,
+    inst_ptr_to_graph_id: &HashMap<usize, u32>,
     arena: &TypeArena,
 ) {
     let inst_ref = alias.get_item_ref();
 
     match cx.resolve(&inst_ref.ref_) {
-        ResolvedItem::CompInst(inst_id, _) => {
+        ResolvedItem::CompInst(_, inst) => {
+            let source = inst_ptr_to_graph_id
+                .get(&(inst as *const ComponentInstance as usize))
+                .copied();
             let connection = InterfaceConnection::from_instance(
                 interface_name.to_string(),
-                Some(inst_id),
+                source,
                 interface_type,
                 arena,
             );
@@ -372,6 +405,7 @@ fn resolve_inst_alias(
             interface_name,
             interface_type,
             node,
+            inst_ptr_to_graph_id,
             arena,
         ),
         _ => {}
@@ -382,16 +416,20 @@ fn resolve_imp_alias(
     alias: &ComponentAlias,
     export_name: &str,
     graph: &mut CompositionGraph,
+    inst_ptr_to_graph_id: &HashMap<usize, u32>,
 ) {
     let inst_ref = alias.get_item_ref();
 
     match cx.resolve(&inst_ref.ref_) {
-        ResolvedItem::CompInst(inst_id, inst) => {
-            let iface_type = pull_export_type_from_instance(export_name, inst, graph, cx);
-            graph.add_export(export_name.to_string(), inst_id, iface_type);
+        ResolvedItem::CompInst(_, inst) => {
+            let ptr = inst as *const ComponentInstance as usize;
+            if let Some(&graph_id) = inst_ptr_to_graph_id.get(&ptr) {
+                let iface_type = pull_export_type_from_instance(export_name, inst, graph, cx);
+                graph.add_export(export_name.to_string(), graph_id, iface_type);
+            }
         }
         ResolvedItem::Alias(_, nested_alias) => {
-            resolve_imp_alias(cx, nested_alias, export_name, graph)
+            resolve_imp_alias(cx, nested_alias, export_name, graph, inst_ptr_to_graph_id)
         }
         _ => {}
     }
@@ -665,6 +703,106 @@ mod tests {
         assert_eq!(
             chain_fp, mw_fp,
             "compatible chain/middleware should have equal fingerprints"
+        );
+    }
+
+    /// Two component definitions each contain an inner `Instantiate` shim at the
+    /// same wasm-local instance id (0).  Before the sequential-ID fix, the second
+    /// shim would silently overwrite the first in the graph, causing both exports
+    /// to point at the same node.  After the fix they must resolve to distinct nodes.
+    #[test]
+    fn parallel_inner_shims_get_distinct_graph_ids() {
+        let wat = r#"(component
+            ;; Two host-provided interfaces
+            (import "test:iface/a@0.1.0" (instance $host-a
+                (export "run" (func))
+            ))
+            (import "test:iface/b@0.1.0" (instance $host-b
+                (export "run" (func))
+            ))
+
+            ;; First wrapper — inner shim gets wasm local id 0 inside this scope
+            (component $comp-a
+                (import "test:iface/a@0.1.0" (instance $imp
+                    (export "run" (func))
+                ))
+                (component $shim-a
+                    (import "test:iface/a@0.1.0" (instance $i
+                        (export "run" (func))
+                    ))
+                    (alias export $i "run" (func $f))
+                    (instance $out (export "run" (func $f)))
+                    (export "test:iface/a@0.1.0" (instance $out))
+                )
+                (instance $shim-a-inst (instantiate $shim-a
+                    (with "test:iface/a@0.1.0" (instance $imp))
+                ))
+                (alias export $shim-a-inst "test:iface/a@0.1.0" (instance $a-inner))
+                (export "test:iface/a@0.1.0" (instance $a-inner))
+            )
+
+            ;; Second wrapper — inner shim also gets wasm local id 0 in its own scope
+            (component $comp-b
+                (import "test:iface/b@0.1.0" (instance $imp
+                    (export "run" (func))
+                ))
+                (component $shim-b
+                    (import "test:iface/b@0.1.0" (instance $i
+                        (export "run" (func))
+                    ))
+                    (alias export $i "run" (func $f))
+                    (instance $out (export "run" (func $f)))
+                    (export "test:iface/b@0.1.0" (instance $out))
+                )
+                (instance $shim-b-inst (instantiate $shim-b
+                    (with "test:iface/b@0.1.0" (instance $imp))
+                ))
+                (alias export $shim-b-inst "test:iface/b@0.1.0" (instance $b-inner))
+                (export "test:iface/b@0.1.0" (instance $b-inner))
+            )
+
+            (instance $a (instantiate $comp-a
+                (with "test:iface/a@0.1.0" (instance $host-a))
+            ))
+            (alias export $a "test:iface/a@0.1.0" (instance $a-out))
+
+            (instance $b (instantiate $comp-b
+                (with "test:iface/b@0.1.0" (instance $host-b))
+            ))
+            (alias export $b "test:iface/b@0.1.0" (instance $b-out))
+
+            (export "test:iface/a@0.1.0" (instance $a-out))
+            (export "test:iface/b@0.1.0" (instance $b-out))
+        )"#;
+
+        let bytes = wat::parse_str(wat).expect("failed to parse WAT");
+        let graph = parse_component(&bytes).expect("failed to parse component");
+
+        let export_a = graph
+            .component_exports
+            .get("test:iface/a@0.1.0")
+            .expect("export for test:iface/a@0.1.0 missing");
+        let export_b = graph
+            .component_exports
+            .get("test:iface/b@0.1.0")
+            .expect("export for test:iface/b@0.1.0 missing");
+
+        let src_a = export_a.source_instance;
+        let src_b = export_b.source_instance;
+
+        assert_ne!(
+            src_a, src_b,
+            "parallel inner shims at the same wasm local id must map to distinct graph nodes"
+        );
+
+        // Each export's source node must actually exist in the graph
+        assert!(
+            graph.get_node(src_a).is_some(),
+            "source node for test:iface/a@0.1.0 must exist in graph"
+        );
+        assert!(
+            graph.get_node(src_b).is_some(),
+            "source node for test:iface/b@0.1.0 must exist in graph"
         );
     }
 

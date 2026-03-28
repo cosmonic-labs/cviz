@@ -43,38 +43,43 @@ pub fn find_chain_interfaces(graph: &CompositionGraph) -> Vec<String> {
 /// Get the chain in request-flow order (outermost → innermost).
 /// The first element is the exported interface (entry point for requests),
 /// and the last element is the innermost interface (imports from host).
+///
+/// When the export source is a synthetic pass-through shim (no recorded imports
+/// for the interface), the chain is built from the inter-component import graph
+/// instead: starting from whichever node provides the interface to the terminal
+/// consumer, walking down through the provider chain.
 pub fn get_chain_for(graph: &CompositionGraph, interface_name: &str) -> Vec<u32> {
-    let mut chain = Vec::new();
-
     // Find the export point for the interface
     let export_instance = graph
         .component_exports
         .iter()
         .find(|(name, _)| name.contains(interface_name))
-        .map(
-            |(
-                _,
-                ExportInfo {
-                    source_instance: idx,
-                    ..
-                },
-            )| *idx,
-        );
+        .map(|(_, ExportInfo { source_instance: idx, .. })| *idx);
 
-    if let Some(start) = export_instance {
-        // Walk from export through the chain following handler imports
+    let Some(start) = export_instance else {
+        return vec![];
+    };
+
+    // If the export source has a non-host import for this interface, walk from
+    // it directly through the import chain (the normal middleware model).
+    let start_has_relevant_import = graph.get_node(start).map_or(false, |n| {
+        n.imports
+            .iter()
+            .any(|c| is_connection_for(c, interface_name) && !c.is_host_import)
+    });
+
+    if start_has_relevant_import {
+        let mut chain = Vec::new();
         let mut current: Option<(u32, bool)> = Some((start, false));
-
         let mut visited = std::collections::HashSet::new();
 
         while let Some((idx, is_host)) = current {
             if is_host || visited.contains(&idx) {
-                break; // Avoid infinite loops
+                break;
             }
             visited.insert(idx);
             chain.push(idx);
 
-            // Find what this node imports for handler
             current = graph.nodes.get(&idx).and_then(|node| {
                 node.imports
                     .iter()
@@ -82,6 +87,68 @@ pub fn get_chain_for(graph: &CompositionGraph, interface_name: &str) -> Vec<u32>
                     .and_then(|conn| conn.source_instance.map(|src| (src, conn.is_host_import)))
             });
         }
+        return chain;
+    }
+
+    // Fallback: the export source is a synthetic shim whose constructor args are
+    // not tracked as instance imports (e.g. WAC-compiled compositions that wire
+    // interfaces via individual function arguments).  Build the provider chain
+    // from the inter-component import graph.
+    build_provider_chain(graph, interface_name)
+}
+
+/// Build the provider chain for `interface_name` from the inter-component import
+/// graph when the export source carries no usable import edges.
+///
+/// Returns the chain in request-flow order: the node that serves the terminal
+/// consumer comes first; the base provider (no further upstream) comes last.
+fn build_provider_chain(graph: &CompositionGraph, interface_name: &str) -> Vec<u32> {
+    // Collect all inter-component (non-host) connections for this interface.
+    let connections: Vec<(u32, u32)> = graph
+        .nodes
+        .iter()
+        .flat_map(|(&consumer_id, node)| {
+            node.imports
+                .iter()
+                .filter(|c| is_connection_for(c, interface_name) && !c.is_host_import)
+                .filter_map(move |c| c.source_instance.map(|src| (consumer_id, src)))
+        })
+        .collect();
+
+    if connections.is_empty() {
+        return vec![];
+    }
+
+    // provider_of[consumer] = source
+    let provider_of: std::collections::HashMap<u32, u32> =
+        connections.iter().copied().collect();
+
+    // Nodes that are themselves providers for this interface
+    let providers: HashSet<u32> = connections.iter().map(|(_, src)| *src).collect();
+
+    // The terminal consumer imports the interface but is not a source for it,
+    // i.e. it is a pure consumer (e.g. service-comp in a fanin composition).
+    let terminal_consumer = connections
+        .iter()
+        .map(|(consumer, _)| *consumer)
+        .find(|c| !providers.contains(c));
+
+    let Some(terminal) = terminal_consumer else {
+        return vec![];
+    };
+
+    // Walk from the terminal consumer's provider down through the provider chain.
+    let mut chain = Vec::new();
+    let mut visited = HashSet::new();
+    let mut current = provider_of.get(&terminal).copied();
+
+    while let Some(node_id) = current {
+        if visited.contains(&node_id) {
+            break;
+        }
+        visited.insert(node_id);
+        chain.push(node_id);
+        current = provider_of.get(&node_id).copied();
     }
 
     chain
