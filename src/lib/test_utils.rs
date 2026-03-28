@@ -339,3 +339,153 @@ pub(crate) fn two_typed_chain_graph() -> CompositionGraph {
 
     graph
 }
+
+// ---------------------------------------------------------------------------
+// Shim-export topologies (WAC-compiled style).
+//
+// In WAC-compiled compositions the exported interface is backed by a synthetic
+// shim instance whose constructor arguments are individual function refs rather
+// than instance refs.  The parser therefore records no interface imports on the
+// shim node, and `get_chain_for` must fall back to the inter-component import
+// graph to reconstruct the provider chain.
+//
+// All three builders export "test:svc/api@1.0.0" from a shim node (highest
+// idx) that has no imports for that interface.
+// ---------------------------------------------------------------------------
+
+// Direct (no middleware):
+//
+//   idx 1  $base      — base provider, no inter-component imports for api
+//   idx 2  $consumer  — imports api from $base (terminal consumer)
+//   idx 3  $shim      — export source, no api imports
+//   export test:svc/api@1.0.0 from idx 3
+//
+// Expected chain: [1]
+pub(crate) fn shim_export_direct_graph() -> CompositionGraph {
+    let mut graph = CompositionGraph::new();
+
+    let base = ComponentNode::new("$base".to_string(), 0, 0);
+    graph.add_node(1, base);
+
+    let mut consumer = ComponentNode::new("$consumer".to_string(), 1, 1);
+    consumer.add_import(InterfaceConnection {
+        interface_name: "test:svc/api@1.0.0".to_string(),
+        source_instance: Some(1),
+        is_host_import: false,
+        interface_type: None,
+        fingerprint: None,
+    });
+    graph.add_node(2, consumer);
+
+    let shim = ComponentNode::new("$shim".to_string(), 2, 2);
+    graph.add_node(3, shim);
+
+    graph.add_export("test:svc/api@1.0.0".to_string(), 3, None);
+    graph
+}
+
+// One middleware:
+//
+//   idx 1  $base       — base provider
+//   idx 2  $middleware — imports api from $base
+//   idx 3  $consumer   — imports api from $middleware (terminal consumer)
+//   idx 4  $shim       — export source, no api imports
+//   export test:svc/api@1.0.0 from idx 4
+//
+// Expected chain: [2, 1]
+pub(crate) fn shim_export_one_middleware_graph() -> CompositionGraph {
+    let mut graph = CompositionGraph::new();
+
+    let base = ComponentNode::new("$base".to_string(), 0, 0);
+    graph.add_node(1, base);
+
+    let mut middleware = ComponentNode::new("$middleware".to_string(), 1, 1);
+    middleware.add_import(InterfaceConnection {
+        interface_name: "test:svc/api@1.0.0".to_string(),
+        source_instance: Some(1),
+        is_host_import: false,
+        interface_type: None,
+        fingerprint: None,
+    });
+    graph.add_node(2, middleware);
+
+    let mut consumer = ComponentNode::new("$consumer".to_string(), 2, 2);
+    consumer.add_import(InterfaceConnection {
+        interface_name: "test:svc/api@1.0.0".to_string(),
+        source_instance: Some(2),
+        is_host_import: false,
+        interface_type: None,
+        fingerprint: None,
+    });
+    graph.add_node(3, consumer);
+
+    let shim = ComponentNode::new("$shim".to_string(), 3, 3);
+    graph.add_node(4, shim);
+
+    graph.add_export("test:svc/api@1.0.0".to_string(), 4, None);
+    graph
+}
+
+// Three middlewares (deepest chain):
+//
+//   idx 1  $base     — base provider
+//   idx 2  $mdl-c    — imports api from $base
+//   idx 3  $mdl-b    — imports api from $mdl-c
+//   idx 4  $mdl-a    — imports api from $mdl-b
+//   idx 5  $consumer — imports api from $mdl-a (terminal consumer)
+//   idx 6  $shim     — export source, no api imports
+//   export test:svc/api@1.0.0 from idx 6
+//
+// Expected chain: [4, 3, 2, 1]
+pub(crate) fn shim_export_three_middleware_graph() -> CompositionGraph {
+    let mut graph = CompositionGraph::new();
+
+    let base = ComponentNode::new("$base".to_string(), 0, 0);
+    graph.add_node(1, base);
+
+    let mut mdl_c = ComponentNode::new("$mdl-c".to_string(), 1, 1);
+    mdl_c.add_import(InterfaceConnection {
+        interface_name: "test:svc/api@1.0.0".to_string(),
+        source_instance: Some(1),
+        is_host_import: false,
+        interface_type: None,
+        fingerprint: None,
+    });
+    graph.add_node(2, mdl_c);
+
+    let mut mdl_b = ComponentNode::new("$mdl-b".to_string(), 2, 2);
+    mdl_b.add_import(InterfaceConnection {
+        interface_name: "test:svc/api@1.0.0".to_string(),
+        source_instance: Some(2),
+        is_host_import: false,
+        interface_type: None,
+        fingerprint: None,
+    });
+    graph.add_node(3, mdl_b);
+
+    let mut mdl_a = ComponentNode::new("$mdl-a".to_string(), 3, 3);
+    mdl_a.add_import(InterfaceConnection {
+        interface_name: "test:svc/api@1.0.0".to_string(),
+        source_instance: Some(3),
+        is_host_import: false,
+        interface_type: None,
+        fingerprint: None,
+    });
+    graph.add_node(4, mdl_a);
+
+    let mut consumer = ComponentNode::new("$consumer".to_string(), 4, 4);
+    consumer.add_import(InterfaceConnection {
+        interface_name: "test:svc/api@1.0.0".to_string(),
+        source_instance: Some(4),
+        is_host_import: false,
+        interface_type: None,
+        fingerprint: None,
+    });
+    graph.add_node(5, consumer);
+
+    let shim = ComponentNode::new("$shim".to_string(), 5, 5);
+    graph.add_node(6, shim);
+
+    graph.add_export("test:svc/api@1.0.0".to_string(), 6, None);
+    graph
+}
