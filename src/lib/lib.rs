@@ -54,7 +54,15 @@ pub fn get_chain_for(graph: &CompositionGraph, interface_name: &str) -> Vec<u32>
         .component_exports
         .iter()
         .find(|(name, _)| name.contains(interface_name))
-        .map(|(_, ExportInfo { source_instance: idx, .. })| *idx);
+        .map(
+            |(
+                _,
+                ExportInfo {
+                    source_instance: idx,
+                    ..
+                },
+            )| *idx,
+        );
 
     let Some(start) = export_instance else {
         return vec![];
@@ -62,7 +70,7 @@ pub fn get_chain_for(graph: &CompositionGraph, interface_name: &str) -> Vec<u32>
 
     // If the export source has a non-host import for this interface, walk from
     // it directly through the import chain (the normal middleware model).
-    let start_has_relevant_import = graph.get_node(start).map_or(false, |n| {
+    let start_has_relevant_import = graph.get_node(start).is_some_and(|n| {
         n.imports
             .iter()
             .any(|c| is_connection_for(c, interface_name) && !c.is_host_import)
@@ -120,8 +128,7 @@ fn build_provider_chain(graph: &CompositionGraph, interface_name: &str) -> Vec<u
     }
 
     // provider_of[consumer] = source
-    let provider_of: std::collections::HashMap<u32, u32> =
-        connections.iter().copied().collect();
+    let provider_of: std::collections::HashMap<u32, u32> = connections.iter().copied().collect();
 
     // Nodes that are themselves providers for this interface
     let providers: HashSet<u32> = connections.iter().map(|(_, src)| *src).collect();
@@ -287,5 +294,70 @@ mod tests {
         // Should not hang; chain length is bounded by node count
         let chain = get_chain_for(&graph, "test:iface/foo@0.1.0");
         assert!(chain.len() <= 2, "cycle detection should bound the chain");
+    }
+
+    // -----------------------------------------------------------------------
+    // Shim-export / provider-chain fallback
+    //
+    // These tests cover the `build_provider_chain` fallback path triggered when
+    // the export source has no recorded imports for the interface — the pattern
+    // produced by WAC-compiled compositions that wire interfaces via individual
+    // function arguments rather than instance arguments.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_get_chain_for_shim_export_direct() {
+        // Export source is a shim with no api imports; the only inter-component
+        // connection is consumer → base.  Chain should be just [base].
+        let graph = shim_export_direct_graph();
+        let chain = get_chain_for(&graph, "test:svc/api@1.0.0");
+        assert_eq!(
+            chain,
+            vec![1],
+            "direct shim export: chain should be [base]"
+        );
+    }
+
+    #[test]
+    fn test_get_chain_for_shim_export_one_middleware() {
+        // consumer → middleware → base, exported via shim.
+        // Chain should be [middleware, base] in request-flow order.
+        let graph = shim_export_one_middleware_graph();
+        let chain = get_chain_for(&graph, "test:svc/api@1.0.0");
+        assert_eq!(
+            chain,
+            vec![2, 1],
+            "one-middleware shim export: chain should be [middleware, base]"
+        );
+        // Sanity-check the node labels
+        assert_eq!(graph.get_node(chain[0]).unwrap().display_label(), "middleware");
+        assert_eq!(graph.get_node(chain[1]).unwrap().display_label(), "base");
+    }
+
+    #[test]
+    fn test_get_chain_for_shim_export_three_middlewares() {
+        // consumer → mdl-a → mdl-b → mdl-c → base, exported via shim.
+        // Chain should be [mdl-a, mdl-b, mdl-c, base].
+        let graph = shim_export_three_middleware_graph();
+        let chain = get_chain_for(&graph, "test:svc/api@1.0.0");
+        assert_eq!(
+            chain,
+            vec![4, 3, 2, 1],
+            "three-middleware shim export: chain should be [mdl-a, mdl-b, mdl-c, base]"
+        );
+        assert_eq!(graph.get_node(chain[0]).unwrap().display_label(), "mdl-a");
+        assert_eq!(graph.get_node(chain[3]).unwrap().display_label(), "base");
+    }
+
+    #[test]
+    fn test_find_chain_interfaces_shim_export() {
+        // Even with a shim export source, the interface qualifies as a chain
+        // because it is exported AND imported inter-component.
+        let graph = shim_export_one_middleware_graph();
+        let chains = find_chain_interfaces(&graph);
+        assert!(
+            chains.iter().any(|c| c.contains("test:svc/api")),
+            "shim-exported interface should be identified as a chain interface"
+        );
     }
 }
