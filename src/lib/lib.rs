@@ -311,11 +311,7 @@ mod tests {
         // connection is consumer → base.  Chain should be just [base].
         let graph = shim_export_direct_graph();
         let chain = get_chain_for(&graph, "test:svc/api@1.0.0");
-        assert_eq!(
-            chain,
-            vec![1],
-            "direct shim export: chain should be [base]"
-        );
+        assert_eq!(chain, vec![1], "direct shim export: chain should be [base]");
     }
 
     #[test]
@@ -330,7 +326,10 @@ mod tests {
             "one-middleware shim export: chain should be [middleware, base]"
         );
         // Sanity-check the node labels
-        assert_eq!(graph.get_node(chain[0]).unwrap().display_label(), "middleware");
+        assert_eq!(
+            graph.get_node(chain[0]).unwrap().display_label(),
+            "middleware"
+        );
         assert_eq!(graph.get_node(chain[1]).unwrap().display_label(), "base");
     }
 
