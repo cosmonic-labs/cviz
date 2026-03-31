@@ -1,6 +1,6 @@
 [package]
 name = "cviz"
-version = "2.0.0-rc1"
+version = "2.0.0-rc2"
 edition = "2021"
 license = "Apache-2.0 WITH LLVM-exception"
 authors = ["Bailey Hayes", "Elizabeth Gilbert"]
