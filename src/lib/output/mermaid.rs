@@ -385,6 +385,8 @@ mod tests {
         let bool_id = graph.arena.intern_val(ValueType::Bool);
 
         let handle_sig = FuncSignature {
+            is_async: false,
+            param_names: vec![],
             params: vec![u32_id],
             results: vec![bool_id],
         };

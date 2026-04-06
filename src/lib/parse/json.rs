@@ -127,7 +127,12 @@ fn convert_func_signature(
         .into_iter()
         .map(|v| intern_value_type(v, arena))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(FuncSignature { params, results })
+    Ok(FuncSignature {
+        is_async: false,
+        param_names: vec![],
+        params,
+        results,
+    })
 }
 
 fn intern_value_type(json: ValueTypeJson, arena: &mut TypeArena) -> Result<ValueTypeId, String> {
@@ -271,6 +276,8 @@ mod tests {
         functions.insert(
             "greet".to_string(),
             FuncSignature {
+                is_async: false,
+                param_names: vec![],
                 params: vec![str_id, u32_id],
                 results: vec![result_ty],
             },
@@ -278,6 +285,8 @@ mod tests {
         functions.insert(
             "status".to_string(),
             FuncSignature {
+                is_async: false,
+                param_names: vec![],
                 params: vec![],
                 results: vec![record_ty],
             },

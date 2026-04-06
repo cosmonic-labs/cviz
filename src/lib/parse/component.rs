@@ -308,13 +308,20 @@ fn intern<'a>(ty: ConcreteValType<'a>, arena: &mut TypeArena) -> ValueTypeId {
 }
 
 fn concrete_to_func_sig<'a>(ft: ConcreteFuncType<'a>, arena: &mut TypeArena) -> FuncSignature {
+    let is_async = ft.is_async;
+    let param_names = ft.params.iter().map(|(name, _)| name.to_string()).collect();
     let params = ft
         .params
         .into_iter()
         .map(|(_, ty)| intern(ty, arena))
         .collect();
     let results = ft.result.map(|ty| intern(ty, arena)).into_iter().collect();
-    FuncSignature { params, results }
+    FuncSignature {
+        is_async,
+        param_names,
+        params,
+        results,
+    }
 }
 
 fn concrete_to_val_type<'a>(ty: ConcreteValType<'a>, arena: &mut TypeArena) -> ValueType {

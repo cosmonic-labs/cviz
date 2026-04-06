@@ -229,6 +229,8 @@ pub(crate) fn typed_chain_graph() -> CompositionGraph {
     let bool_id = graph.arena.intern_val(ValueType::Bool);
 
     let handle_sig = FuncSignature {
+        is_async: false,
+        param_names: vec![],
         params: vec![u32_id],
         results: vec![bool_id],
     };
@@ -272,6 +274,8 @@ pub(crate) fn two_typed_chain_graph() -> CompositionGraph {
     let u32_id = graph.arena.intern_val(ValueType::U32);
     let bool_id = graph.arena.intern_val(ValueType::Bool);
     let handler_sig = FuncSignature {
+        is_async: false,
+        param_names: vec![],
         params: vec![u32_id],
         results: vec![bool_id],
     };
@@ -284,6 +288,8 @@ pub(crate) fn two_typed_chain_graph() -> CompositionGraph {
     // keyvalue type: get(string) -> string
     let str_id = graph.arena.intern_val(ValueType::String);
     let get_sig = FuncSignature {
+        is_async: false,
+        param_names: vec![],
         params: vec![str_id],
         results: vec![str_id],
     };

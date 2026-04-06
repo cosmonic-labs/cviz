@@ -240,6 +240,15 @@ pub struct InstanceInterface {
 /// and comparison of types.
 #[derive(Debug, Clone)]
 pub struct FuncSignature {
+    /// Whether this is an `async` function.
+    pub is_async: bool,
+
+    /// Parameter names of the function, in declaration order.
+    ///
+    /// Parallel to [`params`] — `param_names[i]` is the name for `params[i]`.
+    /// May be empty when names were not available at parse time (e.g. JSON input).
+    pub param_names: Vec<String>,
+
     /// Parameter types of the function.
     ///
     /// Each entry is a [`ValueTypeId`] referring to a value type stored in the
