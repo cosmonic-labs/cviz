@@ -239,7 +239,7 @@ impl ValueTypeJson {
             ValueType::Char => ValueTypeJson::Char,
             ValueType::String => ValueTypeJson::String,
             ValueType::ErrorContext => ValueTypeJson::ErrorContext,
-            ValueType::Resource => ValueTypeJson::Resource,
+            ValueType::Resource(_) => ValueTypeJson::Resource,
             ValueType::AsyncHandle => ValueTypeJson::AsyncHandle,
             ValueType::List(inner) => ValueTypeJson::List {
                 elem: Box::new(ValueTypeJson::from_ir(*inner, arena)),

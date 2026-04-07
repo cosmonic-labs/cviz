@@ -279,7 +279,16 @@ pub enum ValueType {
     String,
     ErrorContext,
 
-    Resource,
+    /// An owned or borrowed resource handle.
+    ///
+    /// The `String` is the export name of the resource within its interface instance
+    /// (e.g. `"request"`, `"response"`).  An empty string indicates an anonymous/unnamed
+    /// resource (e.g. from JSON input or a context where the name is unavailable).
+    ///
+    /// Named resources have distinct `ValueTypeId`s (because `ValueType` is interned by
+    /// value), enabling the proxy generator to treat `request` and `response` as separate
+    /// types even though they are both represented as `i32` handles at the core level.
+    Resource(String),
     AsyncHandle,
 
     List(ValueTypeId),
@@ -614,7 +623,8 @@ impl TypeArena {
                 err.map(|t| self.canonical_val(t)).unwrap_or("_".into())
             ),
 
-            ValueType::Resource => "resource".into(),
+            ValueType::Resource(name) if name.is_empty() => "resource".into(),
+            ValueType::Resource(name) => format!("resource[{}]", name).into(),
             ValueType::AsyncHandle => "async_handle".into(),
 
             ValueType::Bool => "bool".into(),
@@ -739,7 +749,8 @@ impl TypeArena {
                 err.map(|t| self.display_val_inner(t, next))
                     .unwrap_or_else(|| "_".into())
             ),
-            ValueType::Resource => "resource".into(),
+            ValueType::Resource(name) if name.is_empty() => "resource".into(),
+            ValueType::Resource(name) => format!("resource[{}]", name).into(),
             ValueType::AsyncHandle => "async_handle".into(),
             ValueType::Bool => "bool".into(),
             ValueType::S8 => "s8".into(),
@@ -850,7 +861,7 @@ mod tests {
     #[test]
     fn test_display_val_result_with_summarized_err() {
         let mut arena = TypeArena::default();
-        let res_id = arena.intern_val(ValueType::Resource);
+        let res_id = arena.intern_val(ValueType::Resource(String::new()));
         // Large error variant
         let err_id = arena.intern_val(ValueType::Variant(
             (0..10).map(|i| (format!("e{i}"), None)).collect(),

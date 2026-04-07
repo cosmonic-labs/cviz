@@ -151,7 +151,7 @@ fn intern_value_type(json: ValueTypeJson, arena: &mut TypeArena) -> Result<Value
         ValueTypeJson::Char => ValueType::Char,
         ValueTypeJson::String => ValueType::String,
         ValueTypeJson::ErrorContext => ValueType::ErrorContext,
-        ValueTypeJson::Resource => ValueType::Resource,
+        ValueTypeJson::Resource => ValueType::Resource(String::new()),
         ValueTypeJson::AsyncHandle => ValueType::AsyncHandle,
         ValueTypeJson::List { elem } => ValueType::List(intern_value_type(*elem, arena)?),
         ValueTypeJson::FixedSizeList { elem, size } => {
