@@ -236,7 +236,7 @@ pub(crate) fn typed_chain_graph() -> CompositionGraph {
     };
     let mut fns = BTreeMap::new();
     fns.insert("handle".to_string(), handle_sig);
-    let iface_type = InterfaceType::Instance(InstanceInterface { functions: fns });
+    let iface_type = InterfaceType::Instance(InstanceInterface { functions: fns, type_exports: BTreeMap::new() });
 
     let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
     srv.add_import(InterfaceConnection {
@@ -295,7 +295,7 @@ pub(crate) fn two_typed_chain_graph() -> CompositionGraph {
     };
     let mut kv_fns = BTreeMap::new();
     kv_fns.insert("get".to_string(), get_sig);
-    let kv_type = InterfaceType::Instance(InstanceInterface { functions: kv_fns });
+    let kv_type = InterfaceType::Instance(InstanceInterface { functions: kv_fns, type_exports: BTreeMap::new() });
 
     // HTTP chain
     let mut srv_http = ComponentNode::new("$srv-http".to_string(), 0, 0);

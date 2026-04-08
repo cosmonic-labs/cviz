@@ -392,7 +392,7 @@ mod tests {
         };
         let mut functions = BTreeMap::new();
         functions.insert("handle".to_string(), handle_sig);
-        let iface_type = InterfaceType::Instance(InstanceInterface { functions });
+        let iface_type = InterfaceType::Instance(InstanceInterface { functions, type_exports: BTreeMap::new() });
 
         let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
         srv.add_import(InterfaceConnection {

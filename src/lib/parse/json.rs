@@ -108,6 +108,7 @@ fn convert_interface_type(
                 .collect::<Result<BTreeMap<_, _>, String>>()?;
             Ok(InterfaceType::Instance(InstanceInterface {
                 functions: funcs,
+                type_exports: BTreeMap::new(),
             }))
         }
     }
@@ -292,7 +293,7 @@ mod tests {
             },
         );
 
-        let iface = InterfaceType::Instance(InstanceInterface { functions });
+        let iface = InterfaceType::Instance(InstanceInterface { functions, type_exports: BTreeMap::new() });
         let fingerprint = iface.fingerprint(arena);
 
         let mut node = ComponentNode::new("$svc".to_string(), 0, 0);

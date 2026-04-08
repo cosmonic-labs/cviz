@@ -290,12 +290,22 @@ fn concrete_to_interface_type<'a>(
     arena: &mut TypeArena,
 ) -> Option<InterfaceType> {
     match ty {
-        ConcreteType::Instance(funcs) => {
+        ConcreteType::Instance {
+            funcs,
+            type_exports: te,
+        } => {
             let functions = funcs
                 .into_iter()
                 .map(|(name, ft)| (name.to_string(), concrete_to_func_sig(ft, arena)))
                 .collect();
-            Some(InterfaceType::Instance(InstanceInterface { functions }))
+            let type_exports = te
+                .into_iter()
+                .map(|(name, cvt)| (name.to_string(), intern(cvt, arena)))
+                .collect();
+            Some(InterfaceType::Instance(InstanceInterface {
+                functions,
+                type_exports,
+            }))
         }
         ConcreteType::Func(ft) => Some(InterfaceType::Func(concrete_to_func_sig(ft, arena))),
         ConcreteType::Resource => None,

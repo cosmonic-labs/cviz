@@ -230,6 +230,14 @@ pub struct InstanceInterface {
     ///
     /// Keys are function names and values describe their signatures.
     pub functions: BTreeMap<String, FuncSignature>,
+
+    /// Named type exports from the interface (records, variants, resources).
+    ///
+    /// Keys are export names (e.g. "error-code", "DNS-error-payload", "request")
+    /// and values are the interned `ValueTypeId` of the exported type.
+    /// These are needed by proxy generators that must re-export the same types
+    /// from a types-instance import.
+    pub type_exports: BTreeMap<String, ValueTypeId>,
 }
 
 /// Represents the signature of a function in an interface.
