@@ -65,12 +65,10 @@ pub fn parse_component(buff: &[u8]) -> Result<CompositionGraph> {
             continue;
         }
         let name = export.name.0;
-        let needs_fill = visitor
-            .graph
-            .component_exports
-            .get(name)
-            .is_none_or(|e| e.fingerprint.is_none());
-        if needs_fill {
+        // Always try to fill/refill — later visits (outer components) may
+        // produce more complete type information than earlier visits (nested).
+        {
+            eprintln!("[cviz] visitor filling export '{}'", name);
             if let Some(ct) = component.concretize_export(name) {
                 if let Some(it) = concrete_to_interface_type(ct, &mut visitor.graph.arena) {
                     let source = visitor
@@ -241,6 +239,7 @@ impl ComponentVisitor<'_> for Visitor {
     fn visit_comp_export(&mut self, cx: &VisitCtx, _: ItemKind, _: u32, export: &ComponentExport) {
         let export_name = export.name.0.to_string();
         let item = cx.resolve(&export.get_item_ref().ref_);
+        eprintln!("[cviz] visit_comp_export '{}' -> {:?}", export_name, std::mem::discriminant(&item));
 
         // Only track instance exports
         match item {
@@ -253,9 +252,11 @@ impl ComponentVisitor<'_> for Visitor {
                 }
             }
             ResolvedItem::Alias(_, alias) => {
+                eprintln!("[cviz] visit_comp_export Alias for '{}'", export_name);
                 let graph = &mut self.graph;
                 let ptr_map = &self.inst_ptr_to_graph_id;
-                resolve_imp_alias(cx, alias, &export_name, graph, ptr_map);
+                let outer_comp = cx.curr_component();
+                resolve_imp_alias(cx, alias, &export_name, graph, ptr_map, outer_comp);
             }
             _ => {}
         }
@@ -273,7 +274,28 @@ fn pull_export_type_from_instance(
         ResolvedItem::Component(_, c) => c,
         _ => return None,
     };
-    concrete_to_interface_type(comp.concretize_export(export_name)?, &mut graph.arena)
+    // Try the export path first, then fall back to the import path.
+    // The import path often produces better type information for
+    // wac-composed components where exports are pass-throughs.
+    let from_export = comp
+        .concretize_export(export_name)
+        .and_then(|ct| concrete_to_interface_type(ct, &mut graph.arena));
+
+    // If the export path produced an interface with no type_exports
+    // (unnamed resources), try the import path which resolves through
+    // alias outer declarations and can name them.
+    let has_type_exports = from_export.as_ref().is_some_and(|it| match it {
+        InterfaceType::Instance(inst) => !inst.type_exports.is_empty(),
+        _ => true,
+    });
+
+    if has_type_exports {
+        from_export
+    } else {
+        comp.concretize_import(export_name)
+            .and_then(|ct| concrete_to_interface_type(ct, &mut graph.arena))
+            .or(from_export)
+    }
 }
 
 fn pull_type_info(
@@ -282,7 +304,25 @@ fn pull_type_info(
     graph: &mut CompositionGraph,
 ) -> Option<InterfaceType> {
     let comp = (*instantiated_comp)?;
-    concrete_to_interface_type(comp.concretize_import(interface_name)?, &mut graph.arena)
+    // Try the import path first (normal case), then check if the result
+    // has complete type information.  If not, try the export path which
+    // may produce better results for interfaces with resource types.
+    let from_import = comp
+        .concretize_import(interface_name)
+        .and_then(|ct| concrete_to_interface_type(ct, &mut graph.arena));
+
+    let has_type_exports = from_import.as_ref().is_some_and(|it| match it {
+        InterfaceType::Instance(inst) => !inst.type_exports.is_empty(),
+        _ => true,
+    });
+
+    if has_type_exports {
+        from_import
+    } else {
+        comp.concretize_export(interface_name)
+            .and_then(|ct| concrete_to_interface_type(ct, &mut graph.arena))
+            .or(from_import)
+    }
 }
 
 fn concrete_to_interface_type<'a>(
@@ -294,6 +334,14 @@ fn concrete_to_interface_type<'a>(
             funcs,
             type_exports: te,
         } => {
+            eprintln!("[cviz] concrete_to_interface_type: Instance with {} funcs, {} type_exports",
+                funcs.len(), te.len());
+            for (name, ft) in &funcs {
+                for (i, (pname, ptype)) in ft.params.iter().enumerate() {
+                    eprintln!("[cviz]   func '{}' param '{}': {:?}", name, pname,
+                        std::mem::discriminant(ptype));
+                }
+            }
             let functions = funcs
                 .into_iter()
                 .map(|(name, ft)| (name.to_string(), concrete_to_func_sig(ft, arena)))
@@ -368,8 +416,14 @@ fn concrete_to_val_type<'a>(ty: ConcreteValType<'a>, arena: &mut TypeArena) -> V
             ValueType::Enum(names.iter().map(|s| s.to_string()).collect())
         }
         ConcreteValType::Map(key, val) => ValueType::Map(intern(*key, arena), intern(*val, arena)),
-        ConcreteValType::Resource => ValueType::Resource(String::new()),
-        ConcreteValType::NamedResource(name) => ValueType::Resource(name.to_string()),
+        ConcreteValType::Resource => {
+            eprintln!("[cviz] concrete_to_val_type: Resource (unnamed)");
+            ValueType::Resource(String::new())
+        }
+        ConcreteValType::NamedResource(name) => {
+            eprintln!("[cviz] concrete_to_val_type: NamedResource(\"{}\")", name);
+            ValueType::Resource(name.to_string())
+        }
         ConcreteValType::AsyncHandle => ValueType::AsyncHandle,
     }
 }
@@ -435,19 +489,63 @@ fn resolve_imp_alias(
     export_name: &str,
     graph: &mut CompositionGraph,
     inst_ptr_to_graph_id: &HashMap<usize, u32>,
+    outer_comp: &Component,
 ) {
     let inst_ref = alias.get_item_ref();
+    let resolved = cx.resolve(&inst_ref.ref_);
+    eprintln!("[cviz] resolve_imp_alias '{}' resolved to {:?}", export_name, std::mem::discriminant(&resolved));
 
-    match cx.resolve(&inst_ref.ref_) {
+    eprintln!("[cviz]   resolve_imp_alias matching...");
+    match resolved {
         ResolvedItem::CompInst(_, inst) => {
+            eprintln!("[cviz]   matched CompInst");
             let ptr = inst as *const ComponentInstance as usize;
+            eprintln!("[cviz]   CompInst ptr={:#x}, in_map={}", ptr, inst_ptr_to_graph_id.contains_key(&ptr));
             if let Some(&graph_id) = inst_ptr_to_graph_id.get(&ptr) {
-                let iface_type = pull_export_type_from_instance(export_name, inst, graph, cx);
+                let mut iface_type =
+                    pull_export_type_from_instance(export_name, inst, graph, cx);
+
+                let te_count = iface_type.as_ref().map(|it| match it {
+                    InterfaceType::Instance(inst) => inst.type_exports.len(),
+                    _ => 0,
+                }).unwrap_or(0);
+                eprintln!("[cviz]   pull_export_type for '{}': type_exports={}", export_name, te_count);
+
+                // If the nested component produced an interface with unnamed
+                // resources (no type_exports), try the outer component's own
+                // concretize_export which can resolve through alias outer.
+                let has_type_exports = iface_type.as_ref().is_some_and(|it| match it {
+                    InterfaceType::Instance(inst) => !inst.type_exports.is_empty(),
+                    _ => true,
+                });
+                if !has_type_exports {
+                    eprintln!("[cviz] resolve_imp_alias: no type_exports for '{}', trying outer comp", export_name);
+                    if let Some(ct) = outer_comp.concretize_export(export_name) {
+                        if let Some(better) = concrete_to_interface_type(ct, &mut graph.arena) {
+                            let better_has_te = match &better {
+                                InterfaceType::Instance(inst) => !inst.type_exports.is_empty(),
+                                _ => false,
+                            };
+                            eprintln!("[cviz]   outer comp produced type_exports={}", better_has_te);
+                            if better_has_te {
+                                iface_type = Some(better);
+                            }
+                        }
+                    }
+                }
+
                 graph.add_export(export_name.to_string(), graph_id, iface_type);
             }
         }
         ResolvedItem::Alias(_, nested_alias) => {
-            resolve_imp_alias(cx, nested_alias, export_name, graph, inst_ptr_to_graph_id)
+            resolve_imp_alias(
+                cx,
+                nested_alias,
+                export_name,
+                graph,
+                inst_ptr_to_graph_id,
+                outer_comp,
+            )
         }
         _ => {}
     }
