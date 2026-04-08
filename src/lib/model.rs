@@ -235,7 +235,7 @@ pub struct InstanceInterface {
     ///
     /// Keys are export names (e.g. "error-code", "DNS-error-payload", "request")
     /// and values are the interned `ValueTypeId` of the exported type.
-    /// These are needed by proxy generators that must re-export the same types
+    /// These are needed by adapter generators that must re-export the same types
     /// from a types-instance import.
     pub type_exports: BTreeMap<String, ValueTypeId>,
 }
@@ -294,7 +294,7 @@ pub enum ValueType {
     /// resource (e.g. from JSON input or a context where the name is unavailable).
     ///
     /// Named resources have distinct `ValueTypeId`s (because `ValueType` is interned by
-    /// value), enabling the proxy generator to treat `request` and `response` as separate
+    /// value), enabling the adapter generator to treat `request` and `response` as separate
     /// types even though they are both represented as `i32` handles at the core level.
     Resource(String),
     AsyncHandle,
