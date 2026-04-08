@@ -631,8 +631,15 @@ impl TypeArena {
                 err.map(|t| self.canonical_val(t)).unwrap_or("_".into())
             ),
 
-            ValueType::Resource(name) if name.is_empty() => "resource".into(),
-            ValueType::Resource(name) => format!("resource[{}]", name).into(),
+            // For fingerprinting, normalize all resource types to the same canonical
+            // form.  Resource identity is established by aliasing at the component
+            // model level, not by name.  Different parsing paths may or may not
+            // resolve resource names (e.g. `alias outer` vs SubResource exports),
+            // so including names would cause spurious fingerprint mismatches.
+            // NOTE: this means two interfaces with different resource STRUCTURES
+            // (e.g. one resource vs two) will still have different fingerprints
+            // because the function signatures differ structurally.
+            ValueType::Resource(_) => "resource".into(),
             ValueType::AsyncHandle => "async_handle".into(),
 
             ValueType::Bool => "bool".into(),
