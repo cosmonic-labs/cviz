@@ -68,7 +68,6 @@ pub fn parse_component(buff: &[u8]) -> Result<CompositionGraph> {
         // Always try to fill/refill — later visits (outer components) may
         // produce more complete type information than earlier visits (nested).
         {
-            eprintln!("[cviz] visitor filling export '{}'", name);
             if let Some(ct) = component.concretize_export(name) {
                 if let Some(it) = concrete_to_interface_type(ct, &mut visitor.graph.arena) {
                     let source = visitor
@@ -239,7 +238,6 @@ impl ComponentVisitor<'_> for Visitor {
     fn visit_comp_export(&mut self, cx: &VisitCtx, _: ItemKind, _: u32, export: &ComponentExport) {
         let export_name = export.name.0.to_string();
         let item = cx.resolve(&export.get_item_ref().ref_);
-        eprintln!("[cviz] visit_comp_export '{}' -> {:?}", export_name, std::mem::discriminant(&item));
 
         // Only track instance exports
         match item {
@@ -252,7 +250,6 @@ impl ComponentVisitor<'_> for Visitor {
                 }
             }
             ResolvedItem::Alias(_, alias) => {
-                eprintln!("[cviz] visit_comp_export Alias for '{}'", export_name);
                 let graph = &mut self.graph;
                 let ptr_map = &self.inst_ptr_to_graph_id;
                 let outer_comp = cx.curr_component();
@@ -334,14 +331,6 @@ fn concrete_to_interface_type<'a>(
             funcs,
             type_exports: te,
         } => {
-            eprintln!("[cviz] concrete_to_interface_type: Instance with {} funcs, {} type_exports",
-                funcs.len(), te.len());
-            for (name, ft) in &funcs {
-                for (i, (pname, ptype)) in ft.params.iter().enumerate() {
-                    eprintln!("[cviz]   func '{}' param '{}': {:?}", name, pname,
-                        std::mem::discriminant(ptype));
-                }
-            }
             let functions = funcs
                 .into_iter()
                 .map(|(name, ft)| (name.to_string(), concrete_to_func_sig(ft, arena)))
@@ -416,14 +405,8 @@ fn concrete_to_val_type<'a>(ty: ConcreteValType<'a>, arena: &mut TypeArena) -> V
             ValueType::Enum(names.iter().map(|s| s.to_string()).collect())
         }
         ConcreteValType::Map(key, val) => ValueType::Map(intern(*key, arena), intern(*val, arena)),
-        ConcreteValType::Resource => {
-            eprintln!("[cviz] concrete_to_val_type: Resource (unnamed)");
-            ValueType::Resource(String::new())
-        }
-        ConcreteValType::NamedResource(name) => {
-            eprintln!("[cviz] concrete_to_val_type: NamedResource(\"{}\")", name);
-            ValueType::Resource(name.to_string())
-        }
+        ConcreteValType::Resource => ValueType::Resource(String::new()),
+        ConcreteValType::NamedResource(name) => ValueType::Resource(name.to_string()),
         ConcreteValType::AsyncHandle => ValueType::AsyncHandle,
     }
 }
@@ -493,23 +476,13 @@ fn resolve_imp_alias(
 ) {
     let inst_ref = alias.get_item_ref();
     let resolved = cx.resolve(&inst_ref.ref_);
-    eprintln!("[cviz] resolve_imp_alias '{}' resolved to {:?}", export_name, std::mem::discriminant(&resolved));
 
-    eprintln!("[cviz]   resolve_imp_alias matching...");
     match resolved {
         ResolvedItem::CompInst(_, inst) => {
-            eprintln!("[cviz]   matched CompInst");
             let ptr = inst as *const ComponentInstance as usize;
-            eprintln!("[cviz]   CompInst ptr={:#x}, in_map={}", ptr, inst_ptr_to_graph_id.contains_key(&ptr));
             if let Some(&graph_id) = inst_ptr_to_graph_id.get(&ptr) {
                 let mut iface_type =
                     pull_export_type_from_instance(export_name, inst, graph, cx);
-
-                let te_count = iface_type.as_ref().map(|it| match it {
-                    InterfaceType::Instance(inst) => inst.type_exports.len(),
-                    _ => 0,
-                }).unwrap_or(0);
-                eprintln!("[cviz]   pull_export_type for '{}': type_exports={}", export_name, te_count);
 
                 // If the nested component produced an interface with unnamed
                 // resources (no type_exports), try the outer component's own
@@ -519,14 +492,12 @@ fn resolve_imp_alias(
                     _ => true,
                 });
                 if !has_type_exports {
-                    eprintln!("[cviz] resolve_imp_alias: no type_exports for '{}', trying outer comp", export_name);
                     if let Some(ct) = outer_comp.concretize_export(export_name) {
                         if let Some(better) = concrete_to_interface_type(ct, &mut graph.arena) {
                             let better_has_te = match &better {
                                 InterfaceType::Instance(inst) => !inst.type_exports.is_empty(),
                                 _ => false,
                             };
-                            eprintln!("[cviz]   outer comp produced type_exports={}", better_has_te);
                             if better_has_te {
                                 iface_type = Some(better);
                             }
