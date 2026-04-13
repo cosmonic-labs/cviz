@@ -765,7 +765,7 @@ impl TypeArena {
                     .unwrap_or_else(|| "_".into())
             ),
             ValueType::Resource(name) if name.is_empty() => "resource".into(),
-            ValueType::Resource(name) => format!("resource[{}]", name).into(),
+            ValueType::Resource(name) => format!("resource[{}]", name),
             ValueType::AsyncHandle => "async_handle".into(),
             ValueType::Bool => "bool".into(),
             ValueType::S8 => "s8".into(),

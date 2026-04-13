@@ -481,8 +481,7 @@ fn resolve_imp_alias(
         ResolvedItem::CompInst(_, inst) => {
             let ptr = inst as *const ComponentInstance as usize;
             if let Some(&graph_id) = inst_ptr_to_graph_id.get(&ptr) {
-                let mut iface_type =
-                    pull_export_type_from_instance(export_name, inst, graph, cx);
+                let mut iface_type = pull_export_type_from_instance(export_name, inst, graph, cx);
 
                 // If the nested component produced an interface with unnamed
                 // resources (no type_exports), try the outer component's own
@@ -508,16 +507,14 @@ fn resolve_imp_alias(
                 graph.add_export(export_name.to_string(), graph_id, iface_type);
             }
         }
-        ResolvedItem::Alias(_, nested_alias) => {
-            resolve_imp_alias(
-                cx,
-                nested_alias,
-                export_name,
-                graph,
-                inst_ptr_to_graph_id,
-                outer_comp,
-            )
-        }
+        ResolvedItem::Alias(_, nested_alias) => resolve_imp_alias(
+            cx,
+            nested_alias,
+            export_name,
+            graph,
+            inst_ptr_to_graph_id,
+            outer_comp,
+        ),
         _ => {}
     }
 }
