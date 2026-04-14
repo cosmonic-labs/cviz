@@ -235,8 +235,9 @@ pub struct InstanceInterface {
     ///
     /// Keys are export names (e.g. "error-code", "DNS-error-payload", "request")
     /// and values are the interned `ValueTypeId` of the exported type.
-    /// These are needed by adapter generators that must re-export the same types
-    /// from a types-instance import.
+    /// Consumers that need to reference or re-export the same named types
+    /// (for example when generating code that bridges two instances sharing
+    /// a types interface) can resolve them through this map.
     pub type_exports: BTreeMap<String, ValueTypeId>,
 }
 
