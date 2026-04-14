@@ -254,7 +254,7 @@ pub struct FuncSignature {
 
     /// Parameter names of the function, in declaration order.
     ///
-    /// Parallel to [`params`] — `param_names[i]` is the name for `params[i]`.
+    /// Parallel to `params` — `param_names[i]` is the name for `params[i]`.
     /// May be empty when names were not available at parse time (e.g. JSON input).
     pub param_names: Vec<String>,
 
@@ -665,15 +665,15 @@ impl TypeArena {
 
     /// Display-oriented type string for visualizations.
     ///
-    /// Unlike [`canonical_val`], this method summarizes complex types that
-    /// would produce unreadably long strings:
+    /// Unlike [`Self::canonical_val`], this method summarizes complex types
+    /// that would produce unreadably long strings:
     ///
-    /// - Variants/enums/flags/records with more than [`DISPLAY_MAX_ITEMS`]
+    /// - Variants/enums/flags/records with more than `DISPLAY_MAX_ITEMS`
     ///   entries are replaced by `variant{N cases}`, `record{N fields}`, etc.
-    /// - Nesting deeper than [`DISPLAY_MAX_DEPTH`] is replaced by `…`.
+    /// - Nesting deeper than `DISPLAY_MAX_DEPTH` is replaced by `…`.
     ///
     /// Simple scalar types (bool, u32, string, resource, …) are unaffected.
-    /// Fingerprinting always uses [`canonical_val`] and is never truncated.
+    /// Fingerprinting always uses [`Self::canonical_val`] and is never truncated.
     pub fn display_val(&self, id: ValueTypeId) -> String {
         self.display_val_inner(id, 0)
     }
