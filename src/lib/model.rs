@@ -560,6 +560,10 @@ impl TypeArena {
         &self.vals[id.0 as usize]
     }
 
+    pub fn iter_val_ids(&self) -> impl Iterator<Item = ValueTypeId> + '_ {
+        (0..self.vals.len() as u32).map(ValueTypeId)
+    }
+
     pub fn intern_interface(&mut self, interface: &InterfaceType) -> InterfaceTypeId {
         // Serialize the interface to a canonical string
         // Check if it was already interned
