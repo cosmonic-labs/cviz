@@ -229,12 +229,17 @@ pub(crate) fn typed_chain_graph() -> CompositionGraph {
     let bool_id = graph.arena.intern_val(ValueType::Bool);
 
     let handle_sig = FuncSignature {
+        is_async: false,
+        param_names: vec![],
         params: vec![u32_id],
         results: vec![bool_id],
     };
     let mut fns = BTreeMap::new();
     fns.insert("handle".to_string(), handle_sig);
-    let iface_type = InterfaceType::Instance(InstanceInterface { functions: fns });
+    let iface_type = InterfaceType::Instance(InstanceInterface {
+        functions: fns,
+        type_exports: BTreeMap::new(),
+    });
 
     let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
     srv.add_import(InterfaceConnection {
@@ -272,6 +277,8 @@ pub(crate) fn two_typed_chain_graph() -> CompositionGraph {
     let u32_id = graph.arena.intern_val(ValueType::U32);
     let bool_id = graph.arena.intern_val(ValueType::Bool);
     let handler_sig = FuncSignature {
+        is_async: false,
+        param_names: vec![],
         params: vec![u32_id],
         results: vec![bool_id],
     };
@@ -279,17 +286,23 @@ pub(crate) fn two_typed_chain_graph() -> CompositionGraph {
     handler_fns.insert("handle".to_string(), handler_sig);
     let handler_type = InterfaceType::Instance(InstanceInterface {
         functions: handler_fns,
+        type_exports: BTreeMap::new(),
     });
 
     // keyvalue type: get(string) -> string
     let str_id = graph.arena.intern_val(ValueType::String);
     let get_sig = FuncSignature {
+        is_async: false,
+        param_names: vec![],
         params: vec![str_id],
         results: vec![str_id],
     };
     let mut kv_fns = BTreeMap::new();
     kv_fns.insert("get".to_string(), get_sig);
-    let kv_type = InterfaceType::Instance(InstanceInterface { functions: kv_fns });
+    let kv_type = InterfaceType::Instance(InstanceInterface {
+        functions: kv_fns,
+        type_exports: BTreeMap::new(),
+    });
 
     // HTTP chain
     let mut srv_http = ComponentNode::new("$srv-http".to_string(), 0, 0);

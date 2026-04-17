@@ -108,6 +108,7 @@ fn convert_interface_type(
                 .collect::<Result<BTreeMap<_, _>, String>>()?;
             Ok(InterfaceType::Instance(InstanceInterface {
                 functions: funcs,
+                type_exports: BTreeMap::new(),
             }))
         }
     }
@@ -127,7 +128,12 @@ fn convert_func_signature(
         .into_iter()
         .map(|v| intern_value_type(v, arena))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(FuncSignature { params, results })
+    Ok(FuncSignature {
+        is_async: false,
+        param_names: vec![],
+        params,
+        results,
+    })
 }
 
 fn intern_value_type(json: ValueTypeJson, arena: &mut TypeArena) -> Result<ValueTypeId, String> {
@@ -146,7 +152,7 @@ fn intern_value_type(json: ValueTypeJson, arena: &mut TypeArena) -> Result<Value
         ValueTypeJson::Char => ValueType::Char,
         ValueTypeJson::String => ValueType::String,
         ValueTypeJson::ErrorContext => ValueType::ErrorContext,
-        ValueTypeJson::Resource => ValueType::Resource,
+        ValueTypeJson::Resource => ValueType::Resource(String::new()),
         ValueTypeJson::AsyncHandle => ValueType::AsyncHandle,
         ValueTypeJson::List { elem } => ValueType::List(intern_value_type(*elem, arena)?),
         ValueTypeJson::FixedSizeList { elem, size } => {
@@ -271,6 +277,8 @@ mod tests {
         functions.insert(
             "greet".to_string(),
             FuncSignature {
+                is_async: false,
+                param_names: vec![],
                 params: vec![str_id, u32_id],
                 results: vec![result_ty],
             },
@@ -278,12 +286,17 @@ mod tests {
         functions.insert(
             "status".to_string(),
             FuncSignature {
+                is_async: false,
+                param_names: vec![],
                 params: vec![],
                 results: vec![record_ty],
             },
         );
 
-        let iface = InterfaceType::Instance(InstanceInterface { functions });
+        let iface = InterfaceType::Instance(InstanceInterface {
+            functions,
+            type_exports: BTreeMap::new(),
+        });
         let fingerprint = iface.fingerprint(arena);
 
         let mut node = ComponentNode::new("$svc".to_string(), 0, 0);

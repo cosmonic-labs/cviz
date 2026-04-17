@@ -569,6 +569,8 @@ mod tests {
         let mut arena = make_arena();
         let bool_id = arena.intern_val(ValueType::Bool);
         let sig = FuncSignature {
+            is_async: false,
+            param_names: vec![],
             params: vec![],
             results: vec![bool_id],
         };
@@ -580,6 +582,8 @@ mod tests {
         let mut arena = make_arena();
         let u32_id = arena.intern_val(ValueType::U32);
         let sig = FuncSignature {
+            is_async: false,
+            param_names: vec![],
             params: vec![u32_id],
             results: vec![],
         };
@@ -593,6 +597,8 @@ mod tests {
         let str_id = arena.intern_val(ValueType::String);
         let bool_id = arena.intern_val(ValueType::Bool);
         let sig = FuncSignature {
+            is_async: false,
+            param_names: vec![],
             params: vec![u32_id, str_id],
             results: vec![bool_id, str_id],
         };
@@ -608,6 +614,8 @@ mod tests {
         let u32_id = arena.intern_val(ValueType::U32);
         let bool_id = arena.intern_val(ValueType::Bool);
         let sig = FuncSignature {
+            is_async: false,
+            param_names: vec![],
             params: vec![u32_id],
             results: vec![bool_id],
         };
