@@ -1,6 +1,6 @@
 [package]
 name = "cviz"
-version = "2.0.0-rc2"
+version = "2.0.0-rc3"
 edition = "2021"
 license = "Apache-2.0 WITH LLVM-exception"
 authors = ["Bailey Hayes", "Elizabeth Gilbert"]
@@ -20,7 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-wirm = "4.0.0-rc2"
+wirm = "4.0.0-rc3"
 #wirm = { path = "../../research/compilers/wirm"}
 anyhow = "1.0"
 serde_json = "1.0.149"

@@ -230,6 +230,15 @@ pub struct InstanceInterface {
     ///
     /// Keys are function names and values describe their signatures.
     pub functions: BTreeMap<String, FuncSignature>,
+
+    /// Named type exports from the interface (records, variants, resources).
+    ///
+    /// Keys are export names (e.g. "error-code", "DNS-error-payload", "request")
+    /// and values are the interned `ValueTypeId` of the exported type.
+    /// Consumers that need to reference or re-export the same named types
+    /// (for example when generating code that bridges two instances sharing
+    /// a types interface) can resolve them through this map.
+    pub type_exports: BTreeMap<String, ValueTypeId>,
 }
 
 /// Represents the signature of a function in an interface.
@@ -240,6 +249,15 @@ pub struct InstanceInterface {
 /// and comparison of types.
 #[derive(Debug, Clone)]
 pub struct FuncSignature {
+    /// Whether this is an `async` function.
+    pub is_async: bool,
+
+    /// Parameter names of the function, in declaration order.
+    ///
+    /// Parallel to `params` — `param_names[i]` is the name for `params[i]`.
+    /// May be empty when names were not available at parse time (e.g. JSON input).
+    pub param_names: Vec<String>,
+
     /// Parameter types of the function.
     ///
     /// Each entry is a [`ValueTypeId`] referring to a value type stored in the
@@ -270,7 +288,16 @@ pub enum ValueType {
     String,
     ErrorContext,
 
-    Resource,
+    /// An owned or borrowed resource handle.
+    ///
+    /// The `String` is the export name of the resource within its interface instance
+    /// (e.g. `"request"`, `"response"`).  An empty string indicates an anonymous/unnamed
+    /// resource (e.g. from JSON input or a context where the name is unavailable).
+    ///
+    /// Named resources have distinct `ValueTypeId`s (because `ValueType` is interned by
+    /// value), enabling the adapter generator to treat `request` and `response` as separate
+    /// types even though they are both represented as `i32` handles at the core level.
+    Resource(String),
     AsyncHandle,
 
     List(ValueTypeId),
@@ -533,6 +560,10 @@ impl TypeArena {
         &self.vals[id.0 as usize]
     }
 
+    pub fn iter_val_ids(&self) -> impl Iterator<Item = ValueTypeId> + '_ {
+        (0..self.vals.len() as u32).map(ValueTypeId)
+    }
+
     pub fn intern_interface(&mut self, interface: &InterfaceType) -> InterfaceTypeId {
         // Serialize the interface to a canonical string
         // Check if it was already interned
@@ -605,7 +636,15 @@ impl TypeArena {
                 err.map(|t| self.canonical_val(t)).unwrap_or("_".into())
             ),
 
-            ValueType::Resource => "resource".into(),
+            // For fingerprinting, normalize all resource types to the same canonical
+            // form.  Resource identity is established by aliasing at the component
+            // model level, not by name.  Different parsing paths may or may not
+            // resolve resource names (e.g. `alias outer` vs SubResource exports),
+            // so including names would cause spurious fingerprint mismatches.
+            // NOTE: this means two interfaces with different resource STRUCTURES
+            // (e.g. one resource vs two) will still have different fingerprints
+            // because the function signatures differ structurally.
+            ValueType::Resource(_) => "resource".into(),
             ValueType::AsyncHandle => "async_handle".into(),
 
             ValueType::Bool => "bool".into(),
@@ -630,15 +669,15 @@ impl TypeArena {
 
     /// Display-oriented type string for visualizations.
     ///
-    /// Unlike [`canonical_val`], this method summarizes complex types that
-    /// would produce unreadably long strings:
+    /// Unlike [`Self::canonical_val`], this method summarizes complex types
+    /// that would produce unreadably long strings:
     ///
-    /// - Variants/enums/flags/records with more than [`DISPLAY_MAX_ITEMS`]
+    /// - Variants/enums/flags/records with more than `DISPLAY_MAX_ITEMS`
     ///   entries are replaced by `variant{N cases}`, `record{N fields}`, etc.
-    /// - Nesting deeper than [`DISPLAY_MAX_DEPTH`] is replaced by `…`.
+    /// - Nesting deeper than `DISPLAY_MAX_DEPTH` is replaced by `…`.
     ///
     /// Simple scalar types (bool, u32, string, resource, …) are unaffected.
-    /// Fingerprinting always uses [`canonical_val`] and is never truncated.
+    /// Fingerprinting always uses [`Self::canonical_val`] and is never truncated.
     pub fn display_val(&self, id: ValueTypeId) -> String {
         self.display_val_inner(id, 0)
     }
@@ -730,7 +769,8 @@ impl TypeArena {
                 err.map(|t| self.display_val_inner(t, next))
                     .unwrap_or_else(|| "_".into())
             ),
-            ValueType::Resource => "resource".into(),
+            ValueType::Resource(name) if name.is_empty() => "resource".into(),
+            ValueType::Resource(name) => format!("resource[{}]", name),
             ValueType::AsyncHandle => "async_handle".into(),
             ValueType::Bool => "bool".into(),
             ValueType::S8 => "s8".into(),
@@ -841,7 +881,7 @@ mod tests {
     #[test]
     fn test_display_val_result_with_summarized_err() {
         let mut arena = TypeArena::default();
-        let res_id = arena.intern_val(ValueType::Resource);
+        let res_id = arena.intern_val(ValueType::Resource(String::new()));
         // Large error variant
         let err_id = arena.intern_val(ValueType::Variant(
             (0..10).map(|i| (format!("e{i}"), None)).collect(),
