@@ -236,6 +236,14 @@ impl ComponentVisitor<'_> for Visitor {
         }
     }
     fn visit_comp_export(&mut self, cx: &VisitCtx, _: ItemKind, _: u32, export: &ComponentExport) {
+        // `component_exports` is documented as the root component's
+        // public surface, so only record exports emitted at the root
+        // level. `comp_id_to_num` is a stack: len == 1 inside the root
+        // component, >= 2 inside any nested component.
+        if self.comp_id_to_num.len() != 1 {
+            return;
+        }
+
         let export_name = export.name.0.to_string();
         let item = cx.resolve(&export.get_item_ref().ref_);
 
