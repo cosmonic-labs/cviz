@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "cviz"
-version = "2.0.0-rc4"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "clap",
