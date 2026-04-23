@@ -940,4 +940,99 @@ mod tests {
             "incompatible chain/middleware should have different fingerprints"
         );
     }
+
+    /// Regression fixture for a cross-interface type-aliasing shape
+    /// surfaced by the nebula `orders` demo composition. A service
+    /// interface's instance type re-exports types from a sibling
+    /// types-instance import via `(alias outer …) (export … (type
+    /// (eq …)))` — this is what wit-component produces for WIT that
+    /// uses `use other:pkg/types.{X}`.
+    ///
+    /// Expected behavior: cviz surfaces those re-exported names as
+    /// `type_exports` of the service interface (so downstream
+    /// consumers like splicer can locate the aliased component-type
+    /// indices). Current behavior: cviz returns
+    /// `type_exports: []`, and splicer's tier-1 adapter generator
+    /// falls through to locally-redeclared records, producing a
+    /// component that fails validation with
+    /// `instance not valid to be used as export`.
+    #[test]
+    fn cross_interface_aliased_types_populate_type_exports() {
+        // Outer component instantiates an inner component. The inner
+        // imports a types instance (`my:core/types`) plus a service
+        // interface whose instance type `alias outer`s the types
+        // instance's exports — the shape `use my:core/types.{order,
+        // quote}` compiles to.
+        let wat = r#"(component
+            (component $inner
+                (import "my:core/types" (instance $types
+                    (type (record (field "order-id" string)))
+                    (export "order" (type (eq 0)))
+                    (type (record (field "order-id" string) (field "amount" u32)))
+                    (export "quote" (type (eq 2)))
+                ))
+                (alias export $types "order" (type $order))
+                (alias export $types "quote" (type $quote))
+                (import "my:service/orders" (instance $svc
+                    (alias outer 1 $order (type (;0;)))
+                    (export "order" (type (eq 0)))
+                    (alias outer 1 $quote (type (;2;)))
+                    (export "quote" (type (eq 2)))
+                    (type (;4;) (func (param "o" 0) (result 2)))
+                    (export "create-order" (func (type 4)))
+                ))
+                (alias export $svc "create-order" (func $f))
+                (instance $out (export "create-order" (func $f)))
+                (export "my:service/orders" (instance $out))
+            )
+            (import "my:core/types" (instance $host-types
+                (type (record (field "order-id" string)))
+                (export "order" (type (eq 0)))
+                (type (record (field "order-id" string) (field "amount" u32)))
+                (export "quote" (type (eq 2)))
+            ))
+            (alias export $host-types "order" (type $outer-order))
+            (alias export $host-types "quote" (type $outer-quote))
+            (import "my:service/orders" (instance $host-svc
+                (alias outer 1 $outer-order (type (;0;)))
+                (export "order" (type (eq 0)))
+                (alias outer 1 $outer-quote (type (;2;)))
+                (export "quote" (type (eq 2)))
+                (type (;4;) (func (param "o" 0) (result 2)))
+                (export "create-order" (func (type 4)))
+            ))
+            (instance $inst (instantiate $inner
+                (with "my:core/types" (instance $host-types))
+                (with "my:service/orders" (instance $host-svc))
+            ))
+            (alias export $inst "my:service/orders" (instance $out))
+            (export "my:service/orders" (instance $out))
+        )"#;
+        let bytes = wat::parse_str(wat).expect("failed to parse WAT");
+        let graph = parse_component(&bytes).expect("failed to parse component");
+
+        let svc_conn = graph
+            .nodes
+            .values()
+            .flat_map(|n| n.imports.iter())
+            .find(|c| c.interface_name == "my:service/orders")
+            .expect("expected some node to import my:service/orders");
+
+        let inst = match &svc_conn.interface_type {
+            Some(crate::model::InterfaceType::Instance(i)) => i,
+            other => panic!("expected Instance interface_type, got {other:?}"),
+        };
+
+        assert!(
+            inst.type_exports.contains_key("order"),
+            "type_exports should include `order` (aliased from my:core/types \
+             via (alias outer) + (export (type (eq …)))), but got: {:?}",
+            inst.type_exports.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            inst.type_exports.contains_key("quote"),
+            "type_exports should include `quote`, but got: {:?}",
+            inst.type_exports.keys().collect::<Vec<_>>()
+        );
+    }
 }
