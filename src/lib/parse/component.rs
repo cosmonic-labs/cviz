@@ -413,7 +413,6 @@ fn concrete_to_val_type<'a>(ty: ConcreteValType<'a>, arena: &mut TypeArena) -> V
             ValueType::Enum(names.iter().map(|s| s.to_string()).collect())
         }
         ConcreteValType::Map(key, val) => ValueType::Map(intern(*key, arena), intern(*val, arena)),
-        ConcreteValType::Resource => ValueType::Resource(String::new()),
         ConcreteValType::NamedResource(name) => ValueType::Resource(name.to_string()),
         ConcreteValType::AsyncHandle => ValueType::AsyncHandle,
     }
