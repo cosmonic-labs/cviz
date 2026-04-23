@@ -395,7 +395,7 @@ fn concrete_to_val_type<'a>(ty: ConcreteValType<'a>, arena: &mut TypeArena) -> V
                 .collect(),
         ),
         ConcreteValType::List(ty) => ValueType::List(intern(*ty, arena)),
-        ConcreteValType::FixedSizeList(ty, size) => {
+        ConcreteValType::FixedLengthList(ty, size) => {
             ValueType::FixedSizeList(intern(*ty, arena), size)
         }
         ConcreteValType::Tuple(types) => {
