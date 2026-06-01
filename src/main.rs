@@ -1,9 +1,11 @@
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use cviz::output;
 use cviz::output::{DetailLevel, Direction, OutputFormat};
+use cviz::{HighlightColor, Highlights};
 
 #[derive(Parser, Debug)]
 #[command(name = "cviz")]
@@ -26,46 +28,109 @@ struct Args {
     #[arg(short = 'l', long, default_value = "handler-chain", value_enum)]
     detail: DetailLevel,
 
-    /// Show WIT type information on interface connections
-    #[arg(short = 't', long, default_value = "true")]
+    /// Show WIT type information on interface connections.
+    ///
+    /// Accepts a value: `-t true` (default) or `-t false` to hide types.
+    /// Bare `-t` is equivalent to `-t true`.
+    #[arg(
+        short = 't',
+        long,
+        default_value_t = true,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        action = clap::ArgAction::Set,
+    )]
     types: bool,
 
     /// Output file (stdout if not specified)
     #[arg(short, long)]
     output: Option<PathBuf>,
+
+    /// Highlight a node or edge in the graph view.  Repeatable.  Format:
+    ///
+    ///   node:<id>[=<context>][@<color>]
+    ///   edge:<id>[=<context>][@<color>]
+    ///
+    /// Examples:
+    ///   --highlight node:srv
+    ///   --highlight 'node:srv=outdated'
+    ///   --highlight 'edge:wasi:http/handler@0.3.0::middleware->srv=drained@orange'
+    ///
+    /// Colors: yellow (default), cyan, magenta, blue, orange, white.
+    /// Only the `graph` detail level renders highlights.
+    #[arg(long = "highlight", value_name = "SPEC", action = clap::ArgAction::Append)]
+    highlight: Vec<String>,
+
+    /// Force ANSI color emission (otherwise auto-detected from the stdout
+    /// TTY).  Has no effect when `-o` is set or when the format isn't ASCII.
+    #[arg(long, default_value = "auto")]
+    color: ColorMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
+enum ColorMode {
+    #[default]
+    Auto,
+    Always,
+    Never,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Read the component file
     let bytes = std::fs::read(&args.file)
         .with_context(|| format!("Failed to read file: {}", args.file.display()))?;
 
-    // Parse the component
     let graph = cviz::parse::component::parse_component(&bytes)
         .with_context(|| format!("Failed to parse component: {}", args.file.display()))?;
 
-    // Generate the diagram based on format.  The Graph detail level under
-    // Ascii uses a richer entry point that can report when it had to condense
-    // the layout to fit the terminal.
+    let mut highlights = Highlights::new();
+    for spec in &args.highlight {
+        parse_highlight_spec(spec, &mut highlights)
+            .with_context(|| format!("Invalid --highlight value: {spec}"))?;
+    }
+    let highlights = if args.highlight.is_empty() {
+        None
+    } else {
+        Some(highlights)
+    };
+
+    // ANSI color is meaningful only when ASCII output goes to a real TTY.
+    // Forced "always" still emits even when piping (useful for CI logs).
+    let use_color = match args.color {
+        ColorMode::Always => true,
+        ColorMode::Never => false,
+        ColorMode::Auto => args.output.is_none() && std::io::stdout().is_terminal(),
+    };
+
     let mut condensed = false;
+    let mut unmatched_ids: Vec<String> = Vec::new();
     let diagram = match args.format {
         OutputFormat::Ascii if matches!(args.detail, DetailLevel::Graph) => {
             let max_w = terminal_columns();
-            let out = output::graph::generate_graph_ascii(&graph, args.types, max_w);
+            let out = output::graph::generate_graph_ascii(
+                &graph,
+                args.types,
+                max_w,
+                highlights.as_ref(),
+                use_color,
+            );
             condensed = out.condensed;
+            unmatched_ids = out.unmatched_highlight_ids;
             out.ascii
         }
         OutputFormat::Ascii => output::ascii::generate_ascii(&graph, args.detail, args.types),
-        OutputFormat::Mermaid => {
-            output::mermaid::generate_mermaid(&graph, args.detail, args.direction, args.types)
-        }
-        OutputFormat::Json => output::json::generate_json(&graph, false)?, // always generates the full graph
-        OutputFormat::JsonPretty => output::json::generate_json(&graph, true)?, // always generates the full graph
+        OutputFormat::Mermaid => output::mermaid::generate_mermaid(
+            &graph,
+            args.detail,
+            args.direction,
+            args.types,
+            highlights.as_ref(),
+        ),
+        OutputFormat::Json => output::json::generate_json(&graph, false)?,
+        OutputFormat::JsonPretty => output::json::generate_json(&graph, true)?,
     };
 
-    // Output
     if let Some(output_path) = args.output {
         std::fs::write(&output_path, &diagram)
             .with_context(|| format!("Failed to write output: {}", output_path.display()))?;
@@ -80,8 +145,129 @@ fn main() -> Result<()> {
             "note: the diagram was condensed to fit; rerun with `-f mermaid` for a wider view."
         );
     }
+    if !unmatched_ids.is_empty() {
+        let stderr_is_tty = std::io::stderr().is_terminal();
+        let force_color = matches!(args.color, ColorMode::Always);
+        let no_color = matches!(args.color, ColorMode::Never);
+        let warn_color = !no_color && (force_color || stderr_is_tty);
+        // Bold + 256-color orange for the warning — same colorblind-safe
+        // palette as the diagram highlights, easy to spot under the
+        // rendered output where this surface lands.
+        let (bold_warn, reset) = if warn_color {
+            ("\x1b[1;38;5;208m", "\x1b[0m")
+        } else {
+            ("", "")
+        };
+        eprintln!();
+        eprintln!(
+            "{bold_warn}!! warning: these --highlight ids did not match any node or edge:{reset}"
+        );
+        for id in unmatched_ids {
+            eprintln!("{bold_warn}  - {id}{reset}");
+        }
+        eprintln!(
+            "   (canonical edge ids look like `<interface>::<caller>-><provider>` — \
+             try `cviz <file> --format json` to inspect available ids)"
+        );
+    }
 
     Ok(())
+}
+
+/// Parse one `--highlight` value of the form
+/// `node:<id>[=<ctx>][@<color>]` or `edge:<id>[=<ctx>][@<color>]` and
+/// register it into `out`.
+///
+/// `<id>` may contain `::`, `->`, etc. (canonical edge IDs do); the
+/// parser splits on the **first** `:` for the kind and recognises the
+/// **last unescaped** `@<color>` as the optional trailing color override.
+fn parse_highlight_spec(spec: &str, out: &mut Highlights) -> Result<()> {
+    let (kind, rest) = spec
+        .split_once(':')
+        .ok_or_else(|| anyhow!("missing `kind:` prefix; expected `node:` or `edge:`"))?;
+
+    // Detect an optional `@<color>` color override at the very end.
+    //
+    // Canonical edge IDs already contain `@` inside the interface version
+    // (`wasi:http/handler@0.3.0::...`), so a naive "split on the last `@`"
+    // would munch the version.  Instead we only treat the trailing chunk
+    // as a color suffix when it's a pure ASCII-letter word.  The version
+    // tail (digits + dots + `::` + arrow) never matches that, so it's
+    // safely left alone.  A user who wants `@` in a context value can
+    // backslash-escape it (`\@`).
+    let (id_and_ctx_raw, color) = split_color_suffix(rest)?;
+    let id_and_ctx = id_and_ctx_raw.replace("\\@", "@");
+
+    let (id, ctx) = match id_and_ctx.split_once('=') {
+        Some((id, ctx)) => (id.to_string(), Some(ctx.to_string())),
+        None => (id_and_ctx, None),
+    };
+    if id.is_empty() {
+        return Err(anyhow!("id is empty"));
+    }
+
+    match (kind, ctx, color) {
+        ("node", Some(c), Some(col)) => out.highlight_node_with(id, c, col),
+        ("node", Some(c), None) => out.highlight_node(id, c),
+        ("node", None, Some(col)) => out.mark_node_with(id, col),
+        ("node", None, None) => out.mark_node(id),
+        ("edge", Some(c), Some(col)) => out.highlight_edge_with(id, c, col),
+        ("edge", Some(c), None) => out.highlight_edge(id, c),
+        ("edge", None, Some(col)) => out.mark_edge_with(id, col),
+        ("edge", None, None) => out.mark_edge(id),
+        (k, _, _) => return Err(anyhow!("unknown kind `{k}`; expected `node` or `edge`")),
+    }
+    Ok(())
+}
+
+/// Look for an `@<color>` suffix at the very end of `rest`.
+///
+/// Returns `(prefix, Some(color))` when the trailing `@<word>` is
+/// composed of ASCII letters only and parses as a known color name.
+/// Returns `(rest_to_string, None)` when:
+/// - there's no `@` at all, or
+/// - the trailing `@` is backslash-escaped (`\@`), or
+/// - the trailing chunk after `@` contains non-letters (e.g. the version
+///   tail of a canonical edge id like `wasi:http/handler@0.3.0::...`).
+///
+/// Errors only when the trailing chunk is letter-only but isn't a valid
+/// color — that's the "user typo" path.
+fn split_color_suffix(rest: &str) -> Result<(String, Option<HighlightColor>)> {
+    let bytes = rest.as_bytes();
+    let Some(at_idx) = rest.rfind('@') else {
+        return Ok((rest.to_string(), None));
+    };
+    // Backslash-escaped → not a color suffix.
+    let preceding_backslashes = bytes[..at_idx]
+        .iter()
+        .rev()
+        .take_while(|&&b| b == b'\\')
+        .count();
+    if preceding_backslashes % 2 == 1 {
+        return Ok((rest.to_string(), None));
+    }
+    let suffix = &rest[at_idx + 1..];
+    let is_letter_word = !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_alphabetic());
+    if !is_letter_word {
+        // Looks like part of an id (e.g. interface version), leave it alone.
+        return Ok((rest.to_string(), None));
+    }
+    let color = parse_color(suffix)?;
+    Ok((rest[..at_idx].to_string(), Some(color)))
+}
+
+fn parse_color(s: &str) -> Result<HighlightColor> {
+    match s.to_ascii_lowercase().as_str() {
+        "yellow" => Ok(HighlightColor::Yellow),
+        "cyan" => Ok(HighlightColor::Cyan),
+        "magenta" => Ok(HighlightColor::Magenta),
+        "blue" => Ok(HighlightColor::Blue),
+        "orange" => Ok(HighlightColor::Orange),
+        "white" => Ok(HighlightColor::White),
+        other => Err(anyhow!(
+            "unknown color `{other}`; valid: yellow, cyan, magenta, blue, orange, white"
+        )),
+    }
 }
 
 /// Detect the terminal column count.  Prefers the OS ioctl (works even when
@@ -98,4 +284,98 @@ fn terminal_columns() -> Option<usize> {
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .filter(|&w| w > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_highlight_node_basic() {
+        let mut h = Highlights::new();
+        parse_highlight_spec("node:srv", &mut h).unwrap();
+        assert!(h.is_node_highlighted("srv"));
+        assert!(h.node_context_ids("srv").is_empty());
+        assert_eq!(h.node_color("srv"), Some(HighlightColor::Yellow));
+    }
+
+    #[test]
+    fn parse_highlight_node_with_context() {
+        let mut h = Highlights::new();
+        parse_highlight_spec("node:srv=outdated", &mut h).unwrap();
+        assert_eq!(h.node_context_ids("srv"), vec![1]);
+        assert_eq!(h.tag_lines(), vec!["1 outdated".to_string()]);
+    }
+
+    #[test]
+    fn parse_highlight_node_with_color() {
+        let mut h = Highlights::new();
+        parse_highlight_spec("node:srv@orange", &mut h).unwrap();
+        assert_eq!(h.node_color("srv"), Some(HighlightColor::Orange));
+    }
+
+    #[test]
+    fn parse_highlight_node_full() {
+        let mut h = Highlights::new();
+        parse_highlight_spec("node:srv=outdated@cyan", &mut h).unwrap();
+        assert_eq!(h.node_color("srv"), Some(HighlightColor::Cyan));
+        assert_eq!(h.node_context_ids("srv"), vec![1]);
+    }
+
+    #[test]
+    fn parse_highlight_edge_with_canonical_id() {
+        let mut h = Highlights::new();
+        parse_highlight_spec(
+            "edge:wasi:http/handler@0.3.0::middleware->srv=drained",
+            &mut h,
+        )
+        .unwrap();
+        // The `@0.3.0` should NOT be parsed as a color — it's part of the id.
+        assert!(h.is_edge_highlighted("wasi:http/handler@0.3.0::middleware->srv"));
+        assert_eq!(
+            h.edge_context_ids("wasi:http/handler@0.3.0::middleware->srv"),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn parse_highlight_edge_with_color_and_canonical_id() {
+        let mut h = Highlights::new();
+        parse_highlight_spec(
+            "edge:wasi:http/handler@0.3.0::middleware->srv=drained@orange",
+            &mut h,
+        )
+        .unwrap();
+        assert_eq!(
+            h.edge_color("wasi:http/handler@0.3.0::middleware->srv"),
+            Some(HighlightColor::Orange)
+        );
+    }
+
+    #[test]
+    fn parse_highlight_escaped_at_in_context() {
+        // Backslash escapes `@` so it ends up in the context.
+        let mut h = Highlights::new();
+        parse_highlight_spec("node:srv=tag\\@v2", &mut h).unwrap();
+        assert_eq!(h.tag_lines(), vec!["1 tag@v2".to_string()]);
+        assert_eq!(h.node_color("srv"), Some(HighlightColor::Yellow));
+    }
+
+    #[test]
+    fn parse_highlight_rejects_bad_kind() {
+        let mut h = Highlights::new();
+        assert!(parse_highlight_spec("nope:srv", &mut h).is_err());
+    }
+
+    #[test]
+    fn parse_highlight_rejects_empty_id() {
+        let mut h = Highlights::new();
+        assert!(parse_highlight_spec("node:", &mut h).is_err());
+    }
+
+    #[test]
+    fn parse_highlight_rejects_bad_color() {
+        let mut h = Highlights::new();
+        assert!(parse_highlight_spec("node:srv@chartreuse", &mut h).is_err());
+    }
 }

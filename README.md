@@ -18,123 +18,58 @@ cargo install --git https://github.com/cosmonic-labs/cviz
 
 ## Usage
 
-```
-cviz [OPTIONS] <FILE>
-
-Arguments:
-  <FILE>  Path to the .wasm component file
-
-Options:
-  -f, --format <FORMAT>        Output format [default: ascii] [values: ascii, mermaid]
-  -d, --direction <DIRECTION>  Diagram direction (mermaid only) [default: lr] [values: lr, td]
-  -l, --detail <DETAIL>        Detail level [default: handler-chain]
-  -o, --output <OUTPUT>        Output file (stdout if not specified)
-  -h, --help                   Print help
-  -V, --version                Print version
-```
-
-## Output Formats
-
-### ASCII (default)
-
-Clean terminal-friendly box diagrams:
-
 ```bash
-cviz composed.wasm
+cviz <FILE> [OPTIONS]
 ```
 
-```
-┌────────────────────────────────────┐
-│          Middleware Chain          │
-├────────────────────────────────────┤
-│srv ── handler ──> mdl-c            │
-│mdl-c ── handler ──> mdl-b          │
-│mdl-b ── handler ──> mdl-a          │
-│mdl-a ──> [Export: handler]         │
-└────────────────────────────────────┘
-```
+Run `cviz --help` for the full flag reference. The sections below cover
+the features worth knowing about.
 
-### Mermaid
+## Output formats
 
-Generate Mermaid diagrams for documentation or visualization tools:
+- `-f ascii` (default) — terminal-friendly box diagrams.
+- `-f mermaid` — Mermaid source for docs / browsers / CI artifacts.
+- `-f json` / `-f json-pretty` — the parsed composition graph as JSON.
 
-```bash
-cviz composed.wasm -f mermaid
-```
+## Detail levels
 
-```mermaid
-graph LR
-    subgraph composition["Middleware Chain"]
-        srv["srv"]
-        mdl_c["mdl-c"]
-        mdl_b["mdl-b"]
-        mdl_a["mdl-a"]
-    end
+The `-l` flag selects what the renderer draws:
 
-    srv -->|"handler"| mdl_c
-    mdl_c -->|"handler"| mdl_b
-    mdl_b -->|"handler"| mdl_a
-    mdl_a --> export(["Export: handler"])
-```
+- `handler-chain` (default) — the request-flow chain for each exported
+  handler-style interface. Compact, focused on middleware ordering.
+- `all-interfaces` — every interface connection, including host imports.
+- `full` — everything, including synthetic instances and component
+  indices.
+- `graph` — a 2D layout with boxed nodes and request-flow arrows, one
+  section per top-level export. This is the most readable view for
+  non-trivial compositions and the only level that supports
+  highlighting.
 
-## Detail Levels
-
-### `handler-chain` (default)
-
-Shows only the HTTP handler middleware chain - the path from the entry point through all middleware to the final handler export.
-
-```bash
-cviz composed.wasm -l handler-chain
-```
-
-### `all-interfaces`
-
-Shows all interface connections between components, including host imports (WASI interfaces like filesystem, environment, etc.):
-
-```bash
-cviz composed.wasm -l all-interfaces
-```
+A `graph` render of a small two-component composition (`-t false` to
+suppress type symbols):
 
 ```
-┌───────────────────┐
-│   Host Imports    │
-├───────────────────┤
-│  {environment}    │
-│  {exit}           │
-│  {stderr}         │
-│  {stdin}          │
-│  {stdout}         │
-│  {streams}        │
-│  ...              │
-└───────────────────┘
+╞══ handler ════════════════════════════════════════
 
-┌─────────────────────────┐
-│   Component Instances   │
-├─────────────────────────┤
-│  [mdl-a]                │
-│  [mdl-b]                │
-│  [mdl-c]                │
-│  [srv]                  │
-└─────────────────────────┘
-
-┌───────────────────────────────────────────┐
-│                Connections                │
-├───────────────────────────────────────────┤
-│  [srv] ── handler ──> [mdl-c]             │
-│  [mdl-c] ── handler ──> [mdl-b]           │
-│  [mdl-b] ── handler ──> [mdl-a]           │
-│  {environment} --- environment --- [srv]  │
-│  ...                                      │
-└───────────────────────────────────────────┘
+                ┌─────┐             ┌───────┐
+ ext:handler ──▶│ srv │───handler──▶│ srv-b │
+                └─────┘             └───────┘
 ```
 
-### `full`
+Instances reachable from more than one export render with a double-line
+border (`╔═╗`) on subsequent occurrences so shared infrastructure is
+easy to spot. The renderer auto-detects terminal width and wraps wide
+diagrams onto multiple bands; when the terminal is too narrow it
+suggests rerunning with `-f mermaid`.
 
-Shows all instances (including synthetic ones) with full interface names and component indices:
+## Highlighting
 
-```bash
-cviz composed.wasm -l full
-```
+The `graph` view can mark nodes and edges via `--highlight` (see
+`cviz --help` for the syntax). Each highlight takes a canonical id, an
+optional color, and an opaque tag string that any arbitrary tool can use
+to attach reason information to the rendering. Tags surface as a
+numbered list under the diagram, keyed to `[N]` brackets on the
+highlighted boxes and arrows.
 
 ## How It Works
 

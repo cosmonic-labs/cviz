@@ -2,12 +2,14 @@ use crate::model::{CompositionGraph, ExportInfo, InterfaceConnection};
 use std::collections::HashSet;
 
 pub mod canonical_id;
+pub mod highlights;
 pub mod model;
 pub mod output;
 pub mod parse;
 pub mod subgraph;
 
 pub use canonical_id::{canonical_edge_id, node_by_canonical_id};
+pub use highlights::{format_context_label, HighlightColor, Highlights};
 pub use subgraph::{compute_export_subgraphs, shared_instances, ExportSubgraph, SubgraphEdge};
 #[cfg(test)]
 mod snapshot_tests;

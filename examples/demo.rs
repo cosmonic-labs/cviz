@@ -59,7 +59,7 @@ fn save_mermaid(
     subheader(&format!("Mermaid / {label}  →  {path}"));
     let wasm = wat::parse_str(wat_src).expect("WAT parse failed");
     let graph = parse::component::parse_component(&wasm).expect("component parse failed");
-    let diagram = output::mermaid::generate_mermaid(&graph, detail, direction, show_types);
+    let diagram = output::mermaid::generate_mermaid(&graph, detail, direction, show_types, None);
     println!("{diagram}");
     std::fs::write(&path, &diagram).unwrap_or_else(|e| panic!("failed to write {path}: {e}"));
 }
@@ -277,6 +277,7 @@ fn test_01_mermaid_output_is_non_empty() {
         DetailLevel::HandlerChain,
         Direction::LeftToRight,
         true,
+        None,
     );
     assert!(!mermaid.is_empty(), "Mermaid output should be non-empty");
     assert!(mermaid.contains("core"), "Mermaid should contain 'core'");

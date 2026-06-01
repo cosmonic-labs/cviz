@@ -10,7 +10,7 @@ pub fn generate_ascii(graph: &CompositionGraph, detail: DetailLevel, show_types:
         DetailLevel::HandlerChain => generate_handler_chain_ascii(graph, show_types),
         DetailLevel::AllInterfaces => generate_all_interfaces_ascii(graph, show_types),
         DetailLevel::Full => generate_full_ascii(graph, show_types),
-        DetailLevel::Graph => generate_graph_ascii(graph, show_types, None).ascii,
+        DetailLevel::Graph => generate_graph_ascii(graph, show_types, None, None, false).ascii,
     }
 }
 
