@@ -1,9 +1,12 @@
 use crate::model::{CompositionGraph, ExportInfo, InterfaceConnection};
 use std::collections::HashSet;
 
+pub mod canonical_id;
 pub mod model;
 pub mod output;
 pub mod parse;
+
+pub use canonical_id::{canonical_edge_id, node_by_canonical_id};
 #[cfg(test)]
 mod snapshot_tests;
 #[cfg(test)]
