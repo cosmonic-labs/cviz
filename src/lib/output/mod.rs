@@ -1,4 +1,5 @@
 pub mod ascii;
+pub mod graph;
 pub mod json;
 pub mod mermaid;
 
@@ -402,12 +403,13 @@ pub(crate) fn build_full_view(graph: &CompositionGraph, show_types: bool) -> Con
 }
 
 /// Output format for visualization
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
 pub enum OutputFormat {
     #[default]
     Ascii,
     Mermaid,
     Json,
+    #[value(name = "json-pretty")]
     JsonPretty,
 }
 
@@ -429,10 +431,12 @@ impl std::str::FromStr for OutputFormat {
 }
 
 /// Diagram direction (applies to Mermaid only)
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
 pub enum Direction {
     #[default]
+    #[value(name = "lr", alias = "left-to-right")]
     LeftToRight,
+    #[value(name = "td", alias = "top-down")]
     TopDown,
 }
 
@@ -458,15 +462,19 @@ impl std::str::FromStr for Direction {
 }
 
 /// Detail level for the diagram
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
 pub enum DetailLevel {
     /// Only show the HTTP handler chain
     #[default]
+    #[value(name = "handler-chain", alias = "handler")]
     HandlerChain,
     /// Show all interfaces
+    #[value(name = "all-interfaces", alias = "all")]
     AllInterfaces,
     /// Show everything including internal details
     Full,
+    /// Graph-shaped layout: boxed nodes, layered left-to-right
+    Graph,
 }
 
 impl std::str::FromStr for DetailLevel {
@@ -477,6 +485,7 @@ impl std::str::FromStr for DetailLevel {
             "handler-chain" | "handler" => Ok(DetailLevel::HandlerChain),
             "all-interfaces" | "all" => Ok(DetailLevel::AllInterfaces),
             "full" => Ok(DetailLevel::Full),
+            "graph" => Ok(DetailLevel::Graph),
             _ => Err(format!("Invalid detail level: {}", s)),
         }
     }

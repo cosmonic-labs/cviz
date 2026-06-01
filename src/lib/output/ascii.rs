@@ -1,5 +1,7 @@
 use crate::model::{short_interface_name, CompositionGraph};
-use crate::output::{build_all_interfaces_view, build_full_view, DetailLevel, SymbolMap};
+use crate::output::{
+    build_all_interfaces_view, build_full_view, graph::generate_graph_ascii, DetailLevel, SymbolMap,
+};
 use crate::{find_chain_interfaces, get_chain_for};
 
 /// Generate an ASCII diagram from the composition graph
@@ -8,6 +10,7 @@ pub fn generate_ascii(graph: &CompositionGraph, detail: DetailLevel, show_types:
         DetailLevel::HandlerChain => generate_handler_chain_ascii(graph, show_types),
         DetailLevel::AllInterfaces => generate_all_interfaces_ascii(graph, show_types),
         DetailLevel::Full => generate_full_ascii(graph, show_types),
+        DetailLevel::Graph => generate_graph_ascii(graph, show_types, None).ascii,
     }
 }
 

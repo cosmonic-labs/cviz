@@ -15,15 +15,15 @@ struct Args {
     file: PathBuf,
 
     /// Output format
-    #[arg(short, long, default_value = "ascii", value_parser = parse_format)]
+    #[arg(short, long, default_value = "ascii", value_enum)]
     format: OutputFormat,
 
     /// Diagram direction (mermaid only)
-    #[arg(short, long, default_value = "lr", value_parser = parse_direction)]
+    #[arg(short, long, default_value = "lr", value_enum)]
     direction: Direction,
 
     /// Detail level
-    #[arg(short = 'l', long, default_value = "handler-chain", value_parser = parse_detail)]
+    #[arg(short = 'l', long, default_value = "handler-chain", value_enum)]
     detail: DetailLevel,
 
     /// Show WIT type information on interface connections
@@ -33,18 +33,6 @@ struct Args {
     /// Output file (stdout if not specified)
     #[arg(short, long)]
     output: Option<PathBuf>,
-}
-
-fn parse_format(s: &str) -> Result<OutputFormat, String> {
-    s.parse()
-}
-
-fn parse_direction(s: &str) -> Result<Direction, String> {
-    s.parse()
-}
-
-fn parse_detail(s: &str) -> Result<DetailLevel, String> {
-    s.parse()
 }
 
 fn main() -> Result<()> {
@@ -58,8 +46,17 @@ fn main() -> Result<()> {
     let graph = cviz::parse::component::parse_component(&bytes)
         .with_context(|| format!("Failed to parse component: {}", args.file.display()))?;
 
-    // Generate the diagram based on format
+    // Generate the diagram based on format.  The Graph detail level under
+    // Ascii uses a richer entry point that can report when it had to condense
+    // the layout to fit the terminal.
+    let mut condensed = false;
     let diagram = match args.format {
+        OutputFormat::Ascii if matches!(args.detail, DetailLevel::Graph) => {
+            let max_w = terminal_columns();
+            let out = output::graph::generate_graph_ascii(&graph, args.types, max_w);
+            condensed = out.condensed;
+            out.ascii
+        }
         OutputFormat::Ascii => output::ascii::generate_ascii(&graph, args.detail, args.types),
         OutputFormat::Mermaid => {
             output::mermaid::generate_mermaid(&graph, args.detail, args.direction, args.types)
@@ -77,5 +74,28 @@ fn main() -> Result<()> {
         println!("{}", diagram);
     }
 
+    if condensed {
+        eprintln!();
+        eprintln!(
+            "note: the diagram was condensed to fit; rerun with `-f mermaid` for a wider view."
+        );
+    }
+
     Ok(())
+}
+
+/// Detect the terminal column count.  Prefers the OS ioctl (works even when
+/// `$COLUMNS` isn't exported into the child process, which is the default in
+/// most shells); falls back to `$COLUMNS` if the ioctl says we're not on a
+/// terminal (e.g. when piping output to a file).
+fn terminal_columns() -> Option<usize> {
+    if let Some((terminal_size::Width(w), _)) = terminal_size::terminal_size() {
+        if w > 0 {
+            return Some(w as usize);
+        }
+    }
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&w| w > 0)
 }
