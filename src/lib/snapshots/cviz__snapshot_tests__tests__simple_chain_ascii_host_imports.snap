@@ -1,0 +1,13 @@
+---
+source: src/lib/snapshot_tests.rs
+expression: "ascii_snap(&simple_chain_graph(), &host_imports(), false)"
+---
+╞══ handler ════════════════════════════════════════
+
+                ┌────────────┐             ┌─────┐
+ ext:handler ──▶│ middleware │───handler──▶│ srv │
+                └────────────┘             └─────┘
+
+Host imports:
+  middleware ┊ log
+  srv        ┊ handler

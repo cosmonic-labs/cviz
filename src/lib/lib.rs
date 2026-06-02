@@ -119,7 +119,7 @@ pub fn get_chain_for(graph: &CompositionGraph, interface_name: &str) -> Vec<u32>
 ///
 /// Returns the chain in request-flow order: the node that serves the terminal
 /// consumer comes first; the base provider (no further upstream) comes last.
-fn build_provider_chain(graph: &CompositionGraph, interface_name: &str) -> Vec<u32> {
+pub(crate) fn build_provider_chain(graph: &CompositionGraph, interface_name: &str) -> Vec<u32> {
     // Collect all inter-component (non-host) connections for this interface.
     let connections: Vec<(u32, u32)> = graph
         .nodes

@@ -1,0 +1,9 @@
+---
+source: src/lib/snapshot_tests.rs
+expression: "ascii_snap(&long_chain_graph(), &GraphRenderOpts::default(), false)"
+---
+╞══ consumer ════════════════════════════════════════
+
+                 ┌─────────┐              ┌─────────┐              ┌─────────┐
+ ext:consumer ──▶│ gateway │───consumer──▶│ service │───consumer──▶│ backend │
+                 └─────────┘              └─────────┘              └─────────┘

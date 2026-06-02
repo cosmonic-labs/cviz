@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use cviz::output;
-use cviz::output::{DetailLevel, Direction, OutputFormat};
+use cviz::output::graph::GraphRenderOpts;
+use cviz::output::{Direction, OutputFormat};
 use cviz::{HighlightColor, Highlights, Selection};
 
 #[derive(Parser, Debug)]
@@ -25,9 +26,21 @@ struct Args {
     #[arg(short, long, default_value = "lr", value_enum)]
     direction: Direction,
 
-    /// Detail level
-    #[arg(short = 'l', long, default_value = "handler-chain", value_enum)]
-    detail: DetailLevel,
+    /// Show only middleware-chain interfaces — those exported by the
+    /// composition AND re-imported by another component instance.
+    #[arg(long = "chain-only", action = clap::ArgAction::SetTrue)]
+    chain_only: bool,
+
+    /// Substring match on the fully-qualified interface name.  Applied
+    /// after `--chain-only`.  Useful for narrowing to one namespace
+    /// (e.g. `--filter wasi:http`).
+    #[arg(long)]
+    filter: Option<String>,
+
+    /// Render host imports as dashed branches into each importing node
+    /// (mermaid) or as a per-block "Host imports:" footer (ASCII).
+    #[arg(long = "host-imports", action = clap::ArgAction::SetTrue)]
+    host_imports: bool,
 
     /// Hide WIT type information on interface connections.
     #[arg(long = "no-types", action = clap::ArgAction::SetTrue)]
@@ -50,7 +63,7 @@ struct Args {
     /// Colors: yellow (default), cyan, magenta, blue, orange, red,
     /// green, white.  (Red and green together are confusable for ~5% of
     /// readers — pick distinct hues when designing for a colorblind
-    /// audience.)  Only the `graph` detail level renders highlights.
+    /// audience.)
     #[arg(long = "highlight", value_name = "SPEC", action = clap::ArgAction::Append)]
     highlight: Vec<String>,
 
@@ -98,13 +111,19 @@ fn main() -> Result<()> {
     };
 
     let show_types = !args.no_types;
+    let opts = GraphRenderOpts {
+        chain_only: args.chain_only,
+        filter: args.filter.clone(),
+        show_host_imports: args.host_imports,
+    };
     let mut condensed = false;
     let mut unmatched_ids: Vec<String> = Vec::new();
     let diagram = match args.format {
-        OutputFormat::Ascii if matches!(args.detail, DetailLevel::Graph) => {
+        OutputFormat::Ascii => {
             let max_w = terminal_columns();
             let out = output::graph::generate_graph_ascii(
                 &graph,
+                &opts,
                 show_types,
                 max_w,
                 highlights.as_ref(),
@@ -114,10 +133,9 @@ fn main() -> Result<()> {
             unmatched_ids = out.unmatched_highlight_ids;
             out.ascii
         }
-        OutputFormat::Ascii => output::ascii::generate_ascii(&graph, args.detail, show_types),
         OutputFormat::Mermaid => output::mermaid::generate_mermaid(
             &graph,
-            args.detail,
+            &opts,
             args.direction,
             show_types,
             highlights.as_ref(),

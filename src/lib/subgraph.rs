@@ -35,6 +35,12 @@ pub struct SubgraphEdge {
 
 /// Compute one [`ExportSubgraph`] per top-level export, in interface-name
 /// order (the `BTreeMap` iteration order of `component_exports`).
+///
+/// When the recorded export source carries no inter-component import for its
+/// own exported interface (a WAC-compiled passthrough shim wires the interface
+/// via individual function arguments instead), the subgraph is reconstructed
+/// from the inter-component import graph via [`crate::build_provider_chain`]
+/// and rooted at the chain's outermost provider.
 pub fn compute_export_subgraphs(graph: &CompositionGraph) -> Vec<ExportSubgraph> {
     graph
         .component_exports
@@ -44,11 +50,32 @@ pub fn compute_export_subgraphs(graph: &CompositionGraph) -> Vec<ExportSubgraph>
             if src_node.component_index == SYNTHETIC_COMPONENT {
                 return None;
             }
-            let nodes = reachable_from(graph, info.source_instance);
+
+            let source_has_chain_import = src_node
+                .imports
+                .iter()
+                .any(|c| c.interface_name == *name && !c.is_host_import);
+
+            let (source_instance, nodes) = if source_has_chain_import {
+                (
+                    info.source_instance,
+                    reachable_from(graph, info.source_instance),
+                )
+            } else {
+                let chain = crate::build_provider_chain(graph, name);
+                match chain.first() {
+                    Some(&chain_start) => (chain_start, reachable_from(graph, chain_start)),
+                    None => (
+                        info.source_instance,
+                        reachable_from(graph, info.source_instance),
+                    ),
+                }
+            };
+
             let edges = collect_edges(graph, &nodes);
             Some(ExportSubgraph {
                 interface_name: name.clone(),
-                source_instance: info.source_instance,
+                source_instance,
                 nodes,
                 edges,
             })
@@ -295,5 +322,44 @@ mod tests {
             assert!(g.nodes.contains_key(&e.caller));
             assert!(g.nodes.contains_key(&e.provider));
         }
+    }
+
+    #[test]
+    fn shim_export_direct_uses_provider_chain() {
+        let g = shim_export_direct_graph();
+        let sgs = compute_export_subgraphs(&g);
+        assert_eq!(sgs.len(), 1);
+        let sg = &sgs[0];
+        // Shim source (3) substituted with the chain's outermost provider (1 = $base).
+        assert_eq!(sg.source_instance, 1);
+        assert_eq!(sg.nodes, BTreeSet::from([1]));
+        assert!(sg.edges.is_empty());
+    }
+
+    #[test]
+    fn shim_export_one_middleware_uses_provider_chain() {
+        let g = shim_export_one_middleware_graph();
+        let sgs = compute_export_subgraphs(&g);
+        assert_eq!(sgs.len(), 1);
+        let sg = &sgs[0];
+        // Shim source (4) substituted with $middleware (2); reachable chain is [2, 1].
+        assert_eq!(sg.source_instance, 2);
+        assert_eq!(sg.nodes, BTreeSet::from([1, 2]));
+        assert_eq!(sg.edges.len(), 1);
+        let e = &sg.edges[0];
+        assert_eq!(e.caller, 2);
+        assert_eq!(e.provider, 1);
+    }
+
+    #[test]
+    fn shim_export_three_middleware_uses_provider_chain() {
+        let g = shim_export_three_middleware_graph();
+        let sgs = compute_export_subgraphs(&g);
+        assert_eq!(sgs.len(), 1);
+        let sg = &sgs[0];
+        // Shim source (6) substituted with $mdl-a (4); reachable chain is [4, 3, 2, 1].
+        assert_eq!(sg.source_instance, 4);
+        assert_eq!(sg.nodes, BTreeSet::from([1, 2, 3, 4]));
+        assert_eq!(sg.edges.len(), 3);
     }
 }

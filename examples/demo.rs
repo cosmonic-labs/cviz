@@ -10,8 +10,9 @@
 //! Mermaid diagrams are printed to the terminal AND written to demo/out/*.mmd —
 //! open them in https://mermaid.live or render with `mmdc -i <file>.mmd -o <file>.svg`.
 
-use cviz::output::{DetailLevel, Direction};
-use cviz::{output, parse};
+use cviz::output::graph::{generate_graph_ascii, GraphRenderOpts};
+use cviz::output::{mermaid, Direction};
+use cviz::parse;
 use std::path::Path;
 
 // Embed WAT sources at compile time so the example needs no external tooling.
@@ -35,14 +36,28 @@ fn subheader(label: &str) {
     println!("\n  ── {label} ──");
 }
 
+fn chain_only_opts() -> GraphRenderOpts {
+    GraphRenderOpts {
+        chain_only: true,
+        ..Default::default()
+    }
+}
+
+fn host_imports_opts() -> GraphRenderOpts {
+    GraphRenderOpts {
+        show_host_imports: true,
+        ..Default::default()
+    }
+}
+
 /// Parse WAT, render ASCII composition graph, and print to the terminal.
-fn print_ascii(label: &str, wat_src: &str, detail: DetailLevel, show_types: bool) {
+fn print_ascii(label: &str, wat_src: &str, opts: &GraphRenderOpts, show_types: bool) {
     subheader(&format!("Composition graph / {label}"));
     let wasm = wat::parse_str(wat_src).expect("WAT parse failed");
     let graph = parse::component::parse_component(&wasm).expect("component parse failed");
     println!(
         "{}",
-        output::ascii::generate_ascii(&graph, detail, show_types)
+        generate_graph_ascii(&graph, opts, show_types, None, None, false).ascii
     );
 }
 
@@ -51,7 +66,7 @@ fn save_mermaid(
     label: &str,
     filename: &str,
     wat_src: &str,
-    detail: DetailLevel,
+    opts: &GraphRenderOpts,
     direction: Direction,
     show_types: bool,
 ) {
@@ -59,7 +74,7 @@ fn save_mermaid(
     subheader(&format!("Mermaid / {label}  →  {path}"));
     let wasm = wat::parse_str(wat_src).expect("WAT parse failed");
     let graph = parse::component::parse_component(&wasm).expect("component parse failed");
-    let diagram = output::mermaid::generate_mermaid(&graph, detail, direction, show_types, None);
+    let diagram = mermaid::generate_mermaid(&graph, opts, direction, show_types, None);
     println!("{diagram}");
     std::fs::write(&path, &diagram).unwrap_or_else(|e| panic!("failed to write {path}: {e}"));
 }
@@ -72,19 +87,13 @@ fn main() {
     // ──────────────────────────────────────────────────────────────────────────
     header("Scenario 01 — Simple Chain  (host → $core → $auth → export)");
 
-    print_ascii(
-        "handler-chain / types=on",
-        WAT_01,
-        DetailLevel::HandlerChain,
-        true,
-    );
-    print_ascii("all-interfaces", WAT_01, DetailLevel::AllInterfaces, true);
-    print_ascii("full", WAT_01, DetailLevel::Full, true);
+    print_ascii("chain-only / types=on", WAT_01, &chain_only_opts(), true);
+    print_ascii("default + host-imports", WAT_01, &host_imports_opts(), true);
     save_mermaid(
-        "handler-chain",
-        "01-simple-chain-handler-chain.mmd",
+        "chain-only",
+        "01-simple-chain.mmd",
         WAT_01,
-        DetailLevel::HandlerChain,
+        &chain_only_opts(),
         Direction::LeftToRight,
         true,
     );
@@ -94,19 +103,13 @@ fn main() {
     // ──────────────────────────────────────────────────────────────────────────
     header("Scenario 02 — Three-Layer Stack  (host → $core → $auth → $rate → export)");
 
-    print_ascii(
-        "handler-chain / types=on",
-        WAT_02,
-        DetailLevel::HandlerChain,
-        true,
-    );
-    print_ascii("all-interfaces", WAT_02, DetailLevel::AllInterfaces, true);
-    print_ascii("full", WAT_02, DetailLevel::Full, true);
+    print_ascii("chain-only / types=on", WAT_02, &chain_only_opts(), true);
+    print_ascii("default + host-imports", WAT_02, &host_imports_opts(), true);
     save_mermaid(
-        "handler-chain",
-        "02-three-layer-stack-handler-chain.mmd",
+        "chain-only",
+        "02-three-layer-stack.mmd",
         WAT_02,
-        DetailLevel::HandlerChain,
+        &chain_only_opts(),
         Direction::LeftToRight,
         true,
     );
@@ -116,27 +119,21 @@ fn main() {
     // ──────────────────────────────────────────────────────────────────────────
     header("Scenario 03 — Multi-Chain  (HTTP handler chain + keyvalue/store chain)");
 
-    print_ascii(
-        "handler-chain / types=on",
-        WAT_03,
-        DetailLevel::HandlerChain,
-        true,
-    );
-    print_ascii("all-interfaces", WAT_03, DetailLevel::AllInterfaces, true);
-    print_ascii("full", WAT_03, DetailLevel::Full, true);
+    print_ascii("chain-only / types=on", WAT_03, &chain_only_opts(), true);
+    print_ascii("default + host-imports", WAT_03, &host_imports_opts(), true);
     save_mermaid(
-        "handler-chain / direction=LR",
-        "03-multi-chain-handler-chain-lr.mmd",
+        "chain-only / direction=LR",
+        "03-multi-chain-lr.mmd",
         WAT_03,
-        DetailLevel::HandlerChain,
+        &chain_only_opts(),
         Direction::LeftToRight,
         true,
     );
     save_mermaid(
-        "handler-chain / direction=TD",
-        "03-multi-chain-handler-chain-td.mmd",
+        "chain-only / direction=TD",
+        "03-multi-chain-td.mmd",
         WAT_03,
-        DetailLevel::HandlerChain,
+        &chain_only_opts(),
         Direction::TopDown,
         true,
     );
@@ -144,25 +141,27 @@ fn main() {
     // ──────────────────────────────────────────────────────────────────────────
     // Scenario 04 — Chain + Utility Node
     // ──────────────────────────────────────────────────────────────────────────
-    header("Scenario 04 — Chain + Utility Node  ($logger absent from HandlerChain, present in AllInterfaces)");
+    header(
+        "Scenario 04 — Chain + Utility Node  ($logger absent from chain-only, present in default)",
+    );
 
     print_ascii(
-        "handler-chain  ← $logger NOT shown",
+        "chain-only  ← $logger NOT shown",
         WAT_04,
-        DetailLevel::HandlerChain,
+        &chain_only_opts(),
         true,
     );
     print_ascii(
-        "all-interfaces  ← $logger IS shown",
+        "default  ← $logger IS shown",
         WAT_04,
-        DetailLevel::AllInterfaces,
+        &GraphRenderOpts::default(),
         true,
     );
     save_mermaid(
-        "handler-chain",
-        "04-chain-plus-utility-handler-chain.mmd",
+        "chain-only",
+        "04-chain-plus-utility.mmd",
         WAT_04,
-        DetailLevel::HandlerChain,
+        &chain_only_opts(),
         Direction::LeftToRight,
         true,
     );
@@ -172,18 +171,13 @@ fn main() {
     // ──────────────────────────────────────────────────────────────────────────
     header("Scenario 05 — Non-HTTP Chain  (wasi:messaging/consumer pipeline)");
 
-    print_ascii(
-        "handler-chain / types=on",
-        WAT_05,
-        DetailLevel::HandlerChain,
-        true,
-    );
-    print_ascii("all-interfaces", WAT_05, DetailLevel::AllInterfaces, true);
+    print_ascii("chain-only / types=on", WAT_05, &chain_only_opts(), true);
+    print_ascii("default + host-imports", WAT_05, &host_imports_opts(), true);
     save_mermaid(
-        "handler-chain",
-        "05-non-http-chain-handler-chain.mmd",
+        "chain-only",
+        "05-non-http-chain.mmd",
         WAT_05,
-        DetailLevel::HandlerChain,
+        &chain_only_opts(),
         Direction::LeftToRight,
         true,
     );
@@ -194,22 +188,22 @@ fn main() {
     header("Scenario 06 — Typed Chain  (multi-param interface; types on vs off)");
 
     print_ascii(
-        "handler-chain / types=ON  ← key with function signatures",
+        "chain-only / types=ON  ← key with function signatures",
         WAT_06,
-        DetailLevel::HandlerChain,
+        &chain_only_opts(),
         true,
     );
     print_ascii(
-        "handler-chain / types=OFF  ← no key section",
+        "chain-only / types=OFF  ← no key section",
         WAT_06,
-        DetailLevel::HandlerChain,
+        &chain_only_opts(),
         false,
     );
     save_mermaid(
-        "handler-chain / types=on",
-        "06-typed-chain-handler-chain.mmd",
+        "chain-only / types=on",
+        "06-typed-chain.mmd",
         WAT_06,
-        DetailLevel::HandlerChain,
+        &chain_only_opts(),
         Direction::LeftToRight,
         true,
     );
@@ -246,6 +240,22 @@ fn parse_wat(src: &str) -> cviz::model::CompositionGraph {
     parse::component::parse_component(&wasm).expect("component parse failed")
 }
 
+#[allow(dead_code)]
+fn ascii_chain_only(graph: &cviz::model::CompositionGraph, show_types: bool) -> String {
+    generate_graph_ascii(
+        graph,
+        &GraphRenderOpts {
+            chain_only: true,
+            ..Default::default()
+        },
+        show_types,
+        None,
+        None,
+        false,
+    )
+    .ascii
+}
+
 #[test]
 fn test_01_simple_chain_parses_with_two_nodes() {
     let graph = parse_wat(WAT_01);
@@ -264,7 +274,7 @@ fn test_01_simple_chain_parses_with_two_nodes() {
 #[test]
 fn test_01_ascii_output_contains_node_names() {
     let graph = parse_wat(WAT_01);
-    let ascii = output::ascii::generate_ascii(&graph, DetailLevel::HandlerChain, true);
+    let ascii = ascii_chain_only(&graph, true);
     assert!(ascii.contains("core"), "ASCII should contain 'core'");
     assert!(ascii.contains("auth"), "ASCII should contain 'auth'");
 }
@@ -272,15 +282,18 @@ fn test_01_ascii_output_contains_node_names() {
 #[test]
 fn test_01_mermaid_output_is_non_empty() {
     let graph = parse_wat(WAT_01);
-    let mermaid = output::mermaid::generate_mermaid(
+    let m = mermaid::generate_mermaid(
         &graph,
-        DetailLevel::HandlerChain,
+        &GraphRenderOpts {
+            chain_only: true,
+            ..Default::default()
+        },
         Direction::LeftToRight,
         true,
         None,
     );
-    assert!(!mermaid.is_empty(), "Mermaid output should be non-empty");
-    assert!(mermaid.contains("core"), "Mermaid should contain 'core'");
+    assert!(!m.is_empty(), "Mermaid output should be non-empty");
+    assert!(m.contains("core"), "Mermaid should contain 'core'");
 }
 
 #[test]
@@ -305,19 +318,19 @@ fn test_03_multi_chain_has_four_nodes() {
 }
 
 #[test]
-fn test_04_chain_plus_utility_logger_visible_in_all_interfaces() {
+fn test_04_chain_plus_utility_logger_visible_in_default() {
     let graph = parse_wat(WAT_04);
-    // HandlerChain excludes the logger utility node
-    let ascii_hc = output::ascii::generate_ascii(&graph, DetailLevel::HandlerChain, true);
-    // AllInterfaces includes the logger
-    let ascii_all = output::ascii::generate_ascii(&graph, DetailLevel::AllInterfaces, true);
+    // chain_only excludes the logger utility (it's not a chain interface).
+    let ascii_chain = ascii_chain_only(&graph, true);
+    // Default (all subgraphs) includes the logger.
+    let ascii_default =
+        generate_graph_ascii(&graph, &GraphRenderOpts::default(), true, None, None, false).ascii;
     assert!(
-        ascii_all.contains("logger"),
-        "AllInterfaces should show 'logger'"
+        ascii_default.contains("logger"),
+        "default view should show 'logger'"
     );
-    // The handler chain still contains core and auth
-    assert!(ascii_hc.contains("core"));
-    assert!(ascii_hc.contains("auth"));
+    assert!(ascii_chain.contains("core"));
+    assert!(ascii_chain.contains("auth"));
 }
 
 #[test]
@@ -348,9 +361,8 @@ fn test_06_typed_chain_export_has_fingerprint() {
 #[test]
 fn test_06_typed_chain_types_on_shows_signatures() {
     let graph = parse_wat(WAT_06);
-    let with_types = output::ascii::generate_ascii(&graph, DetailLevel::HandlerChain, true);
-    let without_types = output::ascii::generate_ascii(&graph, DetailLevel::HandlerChain, false);
-    // types=on should include more content (the type key section)
+    let with_types = ascii_chain_only(&graph, true);
+    let without_types = ascii_chain_only(&graph, false);
     assert!(
         with_types.len() > without_types.len(),
         "types=on output should be longer than types=off"
