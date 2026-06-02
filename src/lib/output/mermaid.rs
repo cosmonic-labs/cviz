@@ -60,12 +60,17 @@ fn generate_graph(
     output.push_str("    classDef shared stroke-width:3px,stroke-dasharray:5 3\n");
     // One classDef per highlight color in use.  Stays empty (no extra
     // bytes) when there are no highlights.
+    // Highlighted nodes use `fill:` to recolor the background, an
+    // explicit dark `stroke:` to keep the outline neutral (Mermaid
+    // auto-derives a complementary stroke color from the fill when you
+    // leave it unset — orange fill yields a purple stroke), and a
+    // thicker `stroke-width` so the bolder outline reads against the
+    // colored background.
     if let Some(h) = highlights {
         for color in h.colors_used() {
             output.push_str(&format!(
-                "    classDef hl_{} stroke:{},stroke-width:3px,color:{}\n",
+                "    classDef hl_{} fill:{},stroke:#333,stroke-width:3px\n",
                 color.slug(),
-                color.mermaid_hex(),
                 color.mermaid_hex(),
             ));
         }
