@@ -306,24 +306,48 @@ fn render_key_with_tags(
     if symbols.is_empty() && tag_lines.is_empty() {
         return String::new();
     }
-    let mut body_lines: Vec<String> = Vec::new();
-    if !symbols.is_empty() {
-        body_lines.push("Signatures:".to_string());
+
+    // Build each section as a `<br/>`-joined block.  When both are
+    // present we lay them out as two inline-block columns; when only
+    // one is present we skip the layout wrapper.
+    let sigs_block = if symbols.is_empty() {
+        String::new()
+    } else {
+        let mut lines = vec!["Signatures:".to_string()];
         for l in symbols.key_lines() {
-            body_lines.push(preserve_leading_indent(&escape_mermaid_label(&l)));
+            lines.push(preserve_leading_indent(&escape_mermaid_label(&l)));
         }
-    }
-    if !tag_lines.is_empty() {
-        if !body_lines.is_empty() {
-            body_lines.push(String::new());
-        }
-        body_lines.push("Tags:".to_string());
+        lines.join("<br/>")
+    };
+    let tags_block = if tag_lines.is_empty() {
+        String::new()
+    } else {
+        let mut lines = vec!["Tags:".to_string()];
         for l in tag_lines {
-            body_lines.push(preserve_leading_indent(&escape_mermaid_label(&l)));
+            lines.push(preserve_leading_indent(&escape_mermaid_label(&l)));
         }
-    }
-    let body = body_lines.join("<br/>");
-    let content = format!("<div style='text-align:left'>{body}</div>");
+        lines.join("<br/>")
+    };
+
+    // Two `inline-block` columns sit next to each other in the rendered
+    // SVG — Mermaid passes the label through marked.js, which preserves
+    // the inline HTML.  `vertical-align:top` keeps short Tags from
+    // floating to the baseline of the (usually much taller) Signatures
+    // column.  `display:flex` would be cleaner but some markdown→Mermaid
+    // pipelines strip non-trivial CSS; `display:inline-block` is the
+    // conservative pick.
+    let content = match (sigs_block.is_empty(), tags_block.is_empty()) {
+        (false, false) => format!(
+            "<div style='text-align:left'>\
+             <div style='display:inline-block;vertical-align:top;padding-right:32px'>{sigs_block}</div>\
+             <div style='display:inline-block;vertical-align:top'>{tags_block}</div>\
+             </div>",
+        ),
+        (false, true) => format!("<div style='text-align:left'>{sigs_block}</div>"),
+        (true, false) => format!("<div style='text-align:left'>{tags_block}</div>"),
+        (true, true) => unreachable!("guarded above"),
+    };
+
     let mut out = String::new();
     out.push_str(&format!("\n    key[\"{content}\"]\n"));
     out.push_str("    style key fill:none,stroke:none,color:#888\n");

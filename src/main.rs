@@ -79,7 +79,7 @@ fn main() -> Result<()> {
     // CLI-side ctx→tag-id map so consecutive `--highlight` flags that
     // mention the same context string reuse the same tag number rather
     // than each getting their own.  Auto-assigned in insertion order
-    // (first new ctx → 1, next → 2, …) so the in-diagram brackets line
+    // (first new ctx → 0, next → 1, …) so the in-diagram brackets line
     // up with the Tags list under the rendering.
     let mut ctx_to_tag: BTreeMap<String, u32> = BTreeMap::new();
     for spec in &args.highlight {
@@ -217,7 +217,7 @@ fn parse_highlight_spec(
         let tag_id = match ctx_to_tag.get(&ctx) {
             Some(&existing) => existing,
             None => {
-                let next = ctx_to_tag.len() as u32 + 1;
+                let next = ctx_to_tag.len() as u32;
                 out.register_tag(next, ctx.clone())
                     .map_err(|e| anyhow!("{e}"))?;
                 ctx_to_tag.insert(ctx, next);
@@ -324,8 +324,8 @@ mod tests {
     #[test]
     fn parse_highlight_node_with_context() {
         let h = parse_one("node:srv=outdated").unwrap();
-        assert_eq!(h.node_tag_ids("srv"), vec![1]);
-        assert_eq!(h.tag_lines(), vec!["1 outdated".to_string()]);
+        assert_eq!(h.node_tag_ids("srv"), vec![0]);
+        assert_eq!(h.tag_lines(), vec!["0 outdated".to_string()]);
     }
 
     #[test]
@@ -338,7 +338,7 @@ mod tests {
     fn parse_highlight_node_full() {
         let h = parse_one("node:srv=outdated@cyan").unwrap();
         assert_eq!(h.node_color("srv"), Some(HighlightColor::Cyan));
-        assert_eq!(h.node_tag_ids("srv"), vec![1]);
+        assert_eq!(h.node_tag_ids("srv"), vec![0]);
     }
 
     #[test]
@@ -348,7 +348,7 @@ mod tests {
         assert!(h.is_edge_highlighted("wasi:http/handler@0.3.0::middleware->srv"));
         assert_eq!(
             h.edge_tag_ids("wasi:http/handler@0.3.0::middleware->srv"),
-            vec![1]
+            vec![0]
         );
     }
 
@@ -365,21 +365,21 @@ mod tests {
     fn parse_highlight_escaped_at_in_context() {
         // Backslash escapes `@` so it ends up in the context.
         let h = parse_one("node:srv=tag\\@v2").unwrap();
-        assert_eq!(h.tag_lines(), vec!["1 tag@v2".to_string()]);
+        assert_eq!(h.tag_lines(), vec!["0 tag@v2".to_string()]);
         assert_eq!(h.node_color("srv"), Some(HighlightColor::Yellow));
     }
 
     #[test]
     fn parse_highlight_repeated_ctx_reuses_tag_id() {
-        // First spec assigns tag 1 to "drained"; second spec mentions the
-        // same context and should reuse 1 rather than mint 2.
+        // First spec assigns tag 0 to "drained"; second spec mentions the
+        // same context and should reuse 0 rather than mint 1.
         let mut h = Highlights::new();
         let mut map = BTreeMap::new();
         parse_highlight_spec("node:srv=drained", &mut h, &mut map).unwrap();
         parse_highlight_spec("edge:e1::a->b=drained", &mut h, &mut map).unwrap();
-        assert_eq!(h.node_tag_ids("srv"), vec![1]);
-        assert_eq!(h.edge_tag_ids("e1::a->b"), vec![1]);
-        assert_eq!(h.tag_lines(), vec!["1 drained".to_string()]);
+        assert_eq!(h.node_tag_ids("srv"), vec![0]);
+        assert_eq!(h.edge_tag_ids("e1::a->b"), vec![0]);
+        assert_eq!(h.tag_lines(), vec!["0 drained".to_string()]);
     }
 
     #[test]
@@ -388,8 +388,8 @@ mod tests {
         let mut map = BTreeMap::new();
         parse_highlight_spec("node:srv=outdated", &mut h, &mut map).unwrap();
         parse_highlight_spec("edge:e1::a->b=drained", &mut h, &mut map).unwrap();
-        assert_eq!(h.node_tag_ids("srv"), vec![1]);
-        assert_eq!(h.edge_tag_ids("e1::a->b"), vec![2]);
+        assert_eq!(h.node_tag_ids("srv"), vec![0]);
+        assert_eq!(h.edge_tag_ids("e1::a->b"), vec![1]);
     }
 
     #[test]
