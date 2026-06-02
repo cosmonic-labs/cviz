@@ -7,3 +7,10 @@ expression: "ascii_snap(&chain_plus_utility_graph(), &GraphRenderOpts::default()
                 ┌────────────┐             ┌─────┐
  ext:handler ──▶│ middleware │───handler──▶│ srv │
                 └────────────┘             └─────┘
+
+
+╞══ log ════════════════════════════════════════
+
+            ┌────────┐
+ ext:log ──▶│ logger │
+            └────────┘

@@ -213,6 +213,10 @@ pub(crate) fn chain_plus_utility_graph() -> CompositionGraph {
     graph.add_node(3, logger);
 
     graph.add_export("wasi:http/handler@0.3.0".to_string(), 2, None);
+    // $logger re-exports its log interface but nobody imports it inter-component,
+    // so it appears as its own subgraph under default but is filtered out by
+    // --chain-only.  This is what makes the two views render differently.
+    graph.add_export("wasi:logging/log@0.1.0".to_string(), 3, None);
     graph
 }
 

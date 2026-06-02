@@ -52,11 +52,6 @@ mod tests {
     }
 
     #[test]
-    fn simple_chain_ascii_chain_only() {
-        insta::assert_snapshot!(ascii_snap(&simple_chain_graph(), &chain_only(), false));
-    }
-
-    #[test]
     fn simple_chain_ascii_host_imports() {
         insta::assert_snapshot!(ascii_snap(&simple_chain_graph(), &host_imports(), false));
     }
@@ -68,11 +63,6 @@ mod tests {
             &GraphRenderOpts::default(),
             false
         ));
-    }
-
-    #[test]
-    fn simple_chain_mermaid_chain_only() {
-        insta::assert_snapshot!(mermaid_snap(&simple_chain_graph(), &chain_only(), false));
     }
 
     #[test]
@@ -94,22 +84,12 @@ mod tests {
     }
 
     #[test]
-    fn two_chain_ascii_chain_only() {
-        insta::assert_snapshot!(ascii_snap(&two_chain_graph(), &chain_only(), false));
-    }
-
-    #[test]
     fn two_chain_mermaid_default() {
         insta::assert_snapshot!(mermaid_snap(
             &two_chain_graph(),
             &GraphRenderOpts::default(),
             false
         ));
-    }
-
-    #[test]
-    fn two_chain_mermaid_chain_only() {
-        insta::assert_snapshot!(mermaid_snap(&two_chain_graph(), &chain_only(), false));
     }
 
     // -----------------------------------------------------------------------
@@ -126,22 +106,12 @@ mod tests {
     }
 
     #[test]
-    fn long_chain_ascii_chain_only() {
-        insta::assert_snapshot!(ascii_snap(&long_chain_graph(), &chain_only(), false));
-    }
-
-    #[test]
     fn long_chain_mermaid_default() {
         insta::assert_snapshot!(mermaid_snap(
             &long_chain_graph(),
             &GraphRenderOpts::default(),
             false
         ));
-    }
-
-    #[test]
-    fn long_chain_mermaid_chain_only() {
-        insta::assert_snapshot!(mermaid_snap(&long_chain_graph(), &chain_only(), false));
     }
 
     // -----------------------------------------------------------------------

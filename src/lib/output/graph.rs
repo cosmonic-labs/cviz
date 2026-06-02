@@ -2014,7 +2014,7 @@ mod tests {
         )
         .ascii;
         assert!(
-            out.contains("middleware-chain"),
+            out.contains("chained interfaces") && out.contains("--chain-only"),
             "should explain chain_only filtered everything, got: {out}"
         );
     }

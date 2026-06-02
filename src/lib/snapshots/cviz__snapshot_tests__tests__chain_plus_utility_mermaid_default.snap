@@ -12,3 +12,8 @@ graph LR
         ext_wasi_http_handler_0_3_0(["ext: handler"]) --> n2
         n2 -->|"handler"| n1
     end
+
+    subgraph sg_wasi_logging_log_0_1_0["export: log"]
+        n3["logger"]
+        ext_wasi_logging_log_0_1_0(["ext: log"]) --> n3
+    end
