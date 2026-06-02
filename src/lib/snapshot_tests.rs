@@ -20,7 +20,7 @@ mod tests {
     }
 
     fn mermaid_snap(graph: &CompositionGraph, detail: DetailLevel, show_types: bool) -> String {
-        mermaid::generate_mermaid(graph, detail, Direction::LeftToRight, show_types)
+        mermaid::generate_mermaid(graph, detail, Direction::LeftToRight, show_types, None)
     }
 
     // -----------------------------------------------------------------------

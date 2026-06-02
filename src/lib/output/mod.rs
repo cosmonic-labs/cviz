@@ -1,4 +1,5 @@
 pub mod ascii;
+pub mod graph;
 pub mod json;
 pub mod mermaid;
 
@@ -158,6 +159,42 @@ impl SymbolMap {
             _ => return None,
         };
         Some(self.get_or_insert(fp, arena.lookup_interface(id), arena))
+    }
+
+    pub(crate) fn export_symbol(
+        &mut self,
+        graph: &CompositionGraph,
+        interface_name: &str,
+        show_types: bool,
+    ) -> String {
+        if !show_types {
+            return String::new();
+        }
+        graph
+            .component_exports
+            .get(interface_name)
+            .and_then(|info| self.symbol_for_export(info, &graph.arena))
+            .map(str::to_string)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn connection_symbol(
+        &mut self,
+        graph: &CompositionGraph,
+        from_node: &crate::model::ComponentNode,
+        interface_name: &str,
+        show_types: bool,
+    ) -> String {
+        if !show_types {
+            return String::new();
+        }
+        from_node
+            .imports
+            .iter()
+            .find(|c| c.interface_name == interface_name)
+            .and_then(|c| self.symbol_for_conn(c, &graph.arena))
+            .map(str::to_string)
+            .unwrap_or_default()
     }
 
     fn get_or_insert(&mut self, fp: &str, iface: &InterfaceType, arena: &TypeArena) -> &str {
@@ -402,12 +439,13 @@ pub(crate) fn build_full_view(graph: &CompositionGraph, show_types: bool) -> Con
 }
 
 /// Output format for visualization
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
 pub enum OutputFormat {
     #[default]
     Ascii,
     Mermaid,
     Json,
+    #[value(name = "json-pretty")]
     JsonPretty,
 }
 
@@ -429,10 +467,12 @@ impl std::str::FromStr for OutputFormat {
 }
 
 /// Diagram direction (applies to Mermaid only)
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
 pub enum Direction {
     #[default]
+    #[value(name = "lr", alias = "left-to-right")]
     LeftToRight,
+    #[value(name = "td", alias = "top-down")]
     TopDown,
 }
 
@@ -458,15 +498,19 @@ impl std::str::FromStr for Direction {
 }
 
 /// Detail level for the diagram
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
 pub enum DetailLevel {
     /// Only show the HTTP handler chain
     #[default]
+    #[value(name = "handler-chain", alias = "handler")]
     HandlerChain,
     /// Show all interfaces
+    #[value(name = "all-interfaces", alias = "all")]
     AllInterfaces,
     /// Show everything including internal details
     Full,
+    /// Graph-shaped layout: boxed nodes, layered left-to-right
+    Graph,
 }
 
 impl std::str::FromStr for DetailLevel {
@@ -477,6 +521,7 @@ impl std::str::FromStr for DetailLevel {
             "handler-chain" | "handler" => Ok(DetailLevel::HandlerChain),
             "all-interfaces" | "all" => Ok(DetailLevel::AllInterfaces),
             "full" => Ok(DetailLevel::Full),
+            "graph" => Ok(DetailLevel::Graph),
             _ => Err(format!("Invalid detail level: {}", s)),
         }
     }

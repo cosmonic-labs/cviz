@@ -1,9 +1,9 @@
 ---
 source: src/lib/snapshot_tests.rs
-assertion_line: 263
+assertion_line: 331
 expression: "mermaid_snap(&typed_chain_graph(), DetailLevel::Full, true)"
 ---
-%%{init: {'flowchart': {'wrappingWidth': 600}}}%%
+%%{init: {'flowchart': {'wrappingWidth': 2400}}}%%
 graph LR
     subgraph all["All Instances"]
         srv["srv [comp:0]"]
@@ -14,5 +14,5 @@ graph LR
 
     middleware --> export_wasi_http_handler_0_3_0(["Export: wasi:http/handler@0.3.0✦"])
 
-    key["Key\n✦ `handle`: (u32) -> bool"]
-    style key fill:none,stroke:none,text-align:left,color:#888
+    key["<div style='text-align:left'>Signatures:<br/>✦ 'handle': (u32) -&gt; bool</div>"]
+    style key fill:none,stroke:none,color:#888

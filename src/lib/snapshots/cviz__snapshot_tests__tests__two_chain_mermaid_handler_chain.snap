@@ -1,9 +1,9 @@
 ---
 source: src/lib/snapshot_tests.rs
-assertion_line: 81
+assertion_line: 109
 expression: "mermaid_snap(&two_chain_graph(), DetailLevel::HandlerChain, false)"
 ---
-%%{init: {'flowchart': {'wrappingWidth': 600}}}%%
+%%{init: {'flowchart': {'wrappingWidth': 2400}}}%%
 graph LR
     subgraph composition["Service Chains"]
         mw_http["mw-http"]

@@ -1,9 +1,9 @@
 ---
 source: src/lib/snapshot_tests.rs
-assertion_line: 258
+assertion_line: 326
 expression: "mermaid_snap(&typed_chain_graph(), DetailLevel::Full, false)"
 ---
-%%{init: {'flowchart': {'wrappingWidth': 600}}}%%
+%%{init: {'flowchart': {'wrappingWidth': 2400}}}%%
 graph LR
     subgraph all["All Instances"]
         srv["srv [comp:0]"]

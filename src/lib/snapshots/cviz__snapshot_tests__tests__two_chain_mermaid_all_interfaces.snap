@@ -1,9 +1,9 @@
 ---
 source: src/lib/snapshot_tests.rs
-assertion_line: 86
+assertion_line: 118
 expression: "mermaid_snap(&two_chain_graph(), DetailLevel::AllInterfaces, false)"
 ---
-%%{init: {'flowchart': {'wrappingWidth': 600}}}%%
+%%{init: {'flowchart': {'wrappingWidth': 2400}}}%%
 graph LR
     subgraph host["Host Imports"]
         wasi_http_handler_0_3_0["handler"]
@@ -17,10 +17,10 @@ graph LR
         cache["cache"]
     end
 
-    wasi_http_handler_0_3_0 -->|"handler"| srv_http
-    srv_http ──>|"handler"| mw_http
-    wasi_keyvalue_store_0_1_0 -->|"store"| db
-    db ──>|"store"| cache
+    wasi_http_handler_0_3_0 -.->|"handler"| srv_http
+    srv_http -->|"handler"| mw_http
+    wasi_keyvalue_store_0_1_0 -.->|"store"| db
+    db -->|"store"| cache
 
     mw_http --> export_wasi_http_handler_0_3_0(["Export: handler"])
     cache --> export_wasi_keyvalue_store_0_1_0(["Export: store"])

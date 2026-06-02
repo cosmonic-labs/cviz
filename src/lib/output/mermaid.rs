@@ -1,88 +1,308 @@
+use crate::canonical_id::canonical_edge_id;
+use crate::highlights::{format_tag_label, HighlightColor, Highlights};
 use crate::model::{short_interface_name, CompositionGraph};
 use crate::output::{
     build_all_interfaces_view, build_full_view, DetailLevel, Direction, SymbolMap,
 };
+use crate::subgraph::{
+    canonical_ids, compute_export_subgraphs, filtered_tag_lines, shared_instances,
+};
 use crate::{find_chain_interfaces, get_chain_for};
+use std::collections::{BTreeMap, BTreeSet};
 
-/// Generate a Mermaid diagram from the composition graph
+/// Generate a Mermaid diagram from the composition graph.
 pub fn generate_mermaid(
     graph: &CompositionGraph,
     detail: DetailLevel,
     direction: Direction,
     show_types: bool,
+    highlights: Option<&Highlights>,
 ) -> String {
     match detail {
         DetailLevel::HandlerChain => generate_handler_chain(graph, direction, show_types),
         DetailLevel::AllInterfaces => generate_all_interfaces(graph, direction, show_types),
+        DetailLevel::Graph => generate_graph(graph, direction, show_types, highlights),
         DetailLevel::Full => generate_full(graph, direction, show_types),
     }
 }
 
-/// Word-wrap a single key entry line with a hanging indent.
-///
-/// The first token (the symbol, e.g. `✦`) acts as a bullet; continuation
-/// lines are indented by two spaces so they align past the `"✦ "` prefix.
-/// `max_cols` is measured in Unicode scalar values (display columns for the
-/// ASCII/symbol mix we emit).  Lines already short enough are returned as-is.
-fn wrap_bullet(line: &str, max_cols: usize) -> String {
-    if line.chars().count() <= max_cols {
-        return line.to_string();
+/// One `subgraph` cluster per top-level export, mirroring the ASCII graph
+/// view (sectioning by export, request-flow edges, shared-instance
+/// distinction) while letting Mermaid handle the 2D placement.
+fn generate_graph(
+    graph: &CompositionGraph,
+    direction: Direction,
+    show_types: bool,
+    highlights: Option<&Highlights>,
+) -> String {
+    let subgraphs = compute_export_subgraphs(graph);
+    if subgraphs.is_empty() {
+        return generate_all_interfaces(graph, direction, show_types);
     }
-    // Continuation lines indent past the bullet symbol and its trailing space.
-    let indent = "  ";
-    let mut result = String::new();
-    let mut current = String::new();
 
-    for word in line.split_whitespace() {
-        if current.is_empty() {
-            current.push_str(word);
-        } else if current.chars().count() + 1 + word.chars().count() <= max_cols {
-            current.push(' ');
-            current.push_str(word);
-        } else {
-            if !result.is_empty() {
-                result.push_str("\\n");
+    let shared = shared_instances(&subgraphs);
+
+    let mut output = String::from(INIT_DIRECTIVE);
+    output.push_str(&format!("graph {}\n", direction.to_mermaid()));
+    output.push_str("    classDef shared stroke-width:3px,stroke-dasharray:5 3\n");
+
+    if let Some(h) = highlights {
+        for color in h.colors_used() {
+            output.push_str(&format!(
+                "    classDef hl_{color} fill:{},stroke:#333,stroke-width:3px\n",
+                color.mermaid_hex(),
+            ));
+        }
+    }
+    output.push('\n');
+
+    let mut symbols = SymbolMap::new();
+    let mut already_rendered: BTreeSet<u32> = BTreeSet::new();
+
+    let mut link_index: usize = 0;
+    let mut link_styles: Vec<(usize, HighlightColor)> = Vec::new();
+
+    for sg in &subgraphs {
+        let short = short_interface_name(&sg.interface_name);
+        let sg_id = format!("sg_{}", sanitize_for_mermaid(&sg.interface_name));
+        output.push_str(&format!("    subgraph {sg_id}[\"export: {short}\"]\n"));
+
+        for &idx in &sg.nodes {
+            let Some(node) = graph.nodes.get(&idx) else {
+                continue;
+            };
+            if !already_rendered.insert(idx) {
+                continue;
             }
-            result.push_str(&current);
-            current = format!("{indent}{word}");
+            let node_id = node_id_for(idx);
+            let suffix = node_tag_suffix(highlights, node.canonical_id());
+            output.push_str(&format!(
+                "        {node_id}[\"{}{suffix}\"]\n",
+                escape_mermaid_label(node.display_label()),
+            ));
+            // Highlight wins over shared (matches the ASCII renderer).
+            let node_hl = highlights.and_then(|h| h.node_color(node.canonical_id()));
+            if let Some(color) = node_hl {
+                output.push_str(&format!("        class {node_id} hl_{color}\n"));
+            } else if shared.contains(&idx) && idx != sg.source_instance {
+                output.push_str(&format!("        class {node_id} shared\n"));
+            }
         }
-    }
-    if !current.is_empty() {
-        if !result.is_empty() {
-            result.push_str("\\n");
+
+        // Export marker → source-instance arrow.
+        let export_node = format!("ext_{}", sanitize_for_mermaid(&sg.interface_name));
+        let export_sym = symbols.export_symbol(graph, &sg.interface_name, show_types);
+        let (export_hl, export_tag_ids) = export_highlight(graph, highlights, sg);
+        let export_suffix = escape_mermaid_label(&format_tag_label(&export_tag_ids));
+        output.push_str(&format!(
+            "        {export_node}([\"ext: {short}{export_sym}{export_suffix}\"]) --> {}\n",
+            node_id_for(sg.source_instance),
+        ));
+        if let Some(color) = export_hl {
+            link_styles.push((link_index, color));
         }
-        result.push_str(&current);
+        link_index += 1;
+
+        // Inter-component edges, merging parallel interfaces between the
+        // same (caller, provider) pair into one labeled arrow.
+        let mut by_pair: BTreeMap<(u32, u32), (Vec<String>, Option<HighlightColor>)> =
+            BTreeMap::new();
+        for e in &sg.edges {
+            let label = short_interface_name(&e.interface);
+            let symbol = edge_type_symbol(graph, &mut symbols, e, show_types);
+            let (iface_hl, iface_tag_ids) =
+                edge_highlight(graph, highlights, e.caller, e.provider, &e.interface);
+            let ctx_suffix = format_tag_label(&iface_tag_ids);
+            let entry = by_pair.entry((e.caller, e.provider)).or_default();
+            entry.0.push(format!("{label}{symbol}{ctx_suffix}"));
+            // First non-None interface highlight wins the link's color
+            // (matches the ASCII per-edge aggregation).
+            if entry.1.is_none() {
+                entry.1 = iface_hl;
+            }
+        }
+        for ((caller, provider), (labels, hl)) in by_pair {
+            output.push_str(&format!(
+                "        {} -->|\"{}\"| {}\n",
+                node_id_for(caller),
+                escape_mermaid_label(&labels.join(",")),
+                node_id_for(provider),
+            ));
+            if let Some(color) = hl {
+                link_styles.push((link_index, color));
+            }
+            link_index += 1;
+        }
+
+        output.push_str("    end\n\n");
     }
-    result
+
+    let (present_nodes, present_edges) = canonical_ids(graph, &subgraphs);
+    output.push_str(&render_key_with_tags(
+        &symbols,
+        highlights,
+        &present_nodes,
+        &present_edges,
+    ));
+
+    for (idx, color) in link_styles {
+        output.push_str(&format!(
+            "    linkStyle {} stroke:{},stroke-width:3px\n",
+            idx,
+            color.mermaid_hex(),
+        ));
+    }
+    output
 }
 
-/// Render the type-symbol key as a plain-text annotation node.
-///
-/// Produces a single borderless Mermaid node with `Key` as a header and one
-/// wrapped entry per symbol.  Returns an empty string when the SymbolMap is
-/// empty.
+fn node_tag_suffix(highlights: Option<&Highlights>, canonical_id: &str) -> String {
+    let raw = highlights
+        .map(|h| format_tag_label(&h.node_tag_ids(canonical_id)))
+        .unwrap_or_default();
+    escape_mermaid_label(&raw)
+}
+
+fn edge_highlight(
+    graph: &CompositionGraph,
+    highlights: Option<&Highlights>,
+    caller: u32,
+    provider: u32,
+    interface: &str,
+) -> (Option<HighlightColor>, Vec<u32>) {
+    let Some(h) = highlights else {
+        return (None, Vec::new());
+    };
+    let Some(caller_label) = graph.nodes.get(&caller).map(|n| n.canonical_id()) else {
+        return (None, Vec::new());
+    };
+    let Some(provider_label) = graph.nodes.get(&provider).map(|n| n.canonical_id()) else {
+        return (None, Vec::new());
+    };
+    let id = canonical_edge_id(interface, Some(caller_label), provider_label);
+    (h.edge_color(&id), h.edge_tag_ids(&id))
+}
+
+/// Like [`edge_highlight`] but for the boundary (export) edge of a
+/// subgraph.
+fn export_highlight(
+    graph: &CompositionGraph,
+    highlights: Option<&Highlights>,
+    sg: &crate::subgraph::ExportSubgraph,
+) -> (Option<HighlightColor>, Vec<u32>) {
+    let Some(h) = highlights else {
+        return (None, Vec::new());
+    };
+    let Some(src) = graph.nodes.get(&sg.source_instance) else {
+        return (None, Vec::new());
+    };
+    let id = canonical_edge_id(&sg.interface_name, None, src.canonical_id());
+    (h.edge_color(&id), h.edge_tag_ids(&id))
+}
+
+fn edge_type_symbol(
+    graph: &CompositionGraph,
+    symbols: &mut SymbolMap,
+    e: &crate::subgraph::SubgraphEdge,
+    show_types: bool,
+) -> String {
+    if !show_types {
+        return String::new();
+    }
+    let conn = graph
+        .nodes
+        .get(&e.caller)
+        .and_then(|n| n.imports.iter().find(|c| c.interface_name == e.interface));
+    let fp = conn.and_then(|c| c.fingerprint.as_deref());
+    let lines = conn
+        .and_then(|c| c.interface_type.as_ref())
+        .map(|it| crate::output::format_interface_type_lines(it, &graph.arena))
+        .unwrap_or_default();
+    symbols.assign(true, fp, lines)
+}
+
+fn node_id_for(idx: u32) -> String {
+    format!("n{}", idx)
+}
+
+fn render_key_with_tags(
+    symbols: &SymbolMap,
+    highlights: Option<&Highlights>,
+    present_nodes: &BTreeSet<String>,
+    present_edges: &BTreeSet<String>,
+) -> String {
+    let tag_lines = filtered_tag_lines(highlights, present_nodes, present_edges);
+    let sigs_block =
+        (!symbols.is_empty()).then(|| build_key_block("Signatures:", symbols.key_lines()));
+    let tags_block = (!tag_lines.is_empty()).then(|| build_key_block("Tags:", tag_lines));
+
+    let content = match (sigs_block, tags_block) {
+        (None, None) => return String::new(),
+        (Some(sigs), None) => format!("<div style='text-align:left'>{sigs}</div>"),
+        (None, Some(tags)) => format!("<div style='text-align:left'>{tags}</div>"),
+        (Some(sigs), Some(tags)) => format!(
+            "<div style='text-align:left'>\
+             <div style='display:inline-block;vertical-align:top;padding-right:32px'>{sigs}</div>\
+             <div style='display:inline-block;vertical-align:top'>{tags}</div>\
+             </div>",
+        ),
+    };
+
+    format!("\n    key[\"{content}\"]\n    style key fill:none,stroke:none,color:#888\n")
+}
+
+fn build_key_block(header: &str, body: Vec<String>) -> String {
+    std::iter::once(header.to_string())
+        .chain(
+            body.into_iter()
+                .map(|l| preserve_leading_indent(&escape_mermaid_label(&l))),
+        )
+        .collect::<Vec<_>>()
+        .join("<br/>")
+}
+
+/// Signatures-only key node used by the legacy detail levels (which
+/// don't carry highlight tags).
 fn render_key(symbols: &SymbolMap) -> String {
     if symbols.is_empty() {
         return String::new();
     }
-    let content = std::iter::once("Key".to_string())
-        .chain(symbols.key_lines().into_iter().map(|l| wrap_bullet(&l, 72)))
-        .collect::<Vec<_>>()
-        .join("\\n");
+    let body = build_key_block("Signatures:", symbols.key_lines());
+    format!(
+        "\n    key[\"<div style='text-align:left'>{body}</div>\"]\
+        \n    style key fill:none,stroke:none,color:#888\n"
+    )
+}
+
+/// Escape characters that Mermaid's default label parser (marked.js)
+/// interprets as markdown/HTML.
+fn escape_mermaid_label(s: &str) -> String {
+    s.replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('`', "'")
+        .replace('[', "⟦")
+        .replace(']', "⟧")
+}
+
+fn preserve_leading_indent(s: &str) -> String {
     let mut out = String::new();
-    out.push_str(&format!("\n    key[\"{content}\"]\n"));
-    out.push_str("    style key fill:none,stroke:none,text-align:left,color:#888\n");
+    let mut leading = true;
+    for c in s.chars() {
+        if leading && c == ' ' {
+            out.push_str("&nbsp;&nbsp;");
+        } else {
+            leading = false;
+            out.push(c);
+        }
+    }
     out
 }
 
-/// Mermaid init directive that widens the text-wrapping threshold.
-///
-/// Mermaid auto-wraps node label text at ~200 px by default.  Setting a
-/// larger `wrappingWidth` prevents the renderer from breaking our carefully
-/// formatted key lines at unexpected points.
-const INIT_DIRECTIVE: &str = "%%{init: {'flowchart': {'wrappingWidth': 600}}}%%\n";
+/// Mermaid auto-wraps node label text at ~200 px by default; bump it
+/// so the wide Signatures key isn't wrapped at an arbitrary mid-line
+/// column.
+const INIT_DIRECTIVE: &str = "%%{init: {'flowchart': {'wrappingWidth': 2400}}}%%\n";
 
-/// Generate a diagram showing all middleware chains (request flow direction)
+/// Each exported handler interface as a request-flow chain.
 fn generate_handler_chain(
     graph: &CompositionGraph,
     direction: Direction,
@@ -92,7 +312,6 @@ fn generate_handler_chain(
     output.push_str(&format!("graph {}\n", direction.to_mermaid()));
 
     let chain_interfaces = find_chain_interfaces(graph);
-
     if chain_interfaces.is_empty() {
         output.push_str("    empty[\"No middleware chains found\"]\n");
         return output;
@@ -100,8 +319,6 @@ fn generate_handler_chain(
 
     let mut symbols = SymbolMap::new();
 
-    // One subgraph per chain interface, all nodes collected into a single
-    // "Middleware Chains" subgraph
     output.push_str("    subgraph composition[\"Service Chains\"]\n");
     for iface in &chain_interfaces {
         for &idx in &get_chain_for(graph, iface) {
@@ -113,32 +330,19 @@ fn generate_handler_chain(
     }
     output.push_str("    end\n\n");
 
-    // Edges per chain
     for iface in &chain_interfaces {
         let chain = get_chain_for(graph, iface);
         if chain.is_empty() {
             continue;
         }
         let short = short_interface_name(iface);
-
-        let export_sym: String = show_types
-            .then(|| {
-                graph
-                    .component_exports
-                    .get(iface.as_str())
-                    .and_then(|info| symbols.symbol_for_export(info, &graph.arena))
-                    .map(str::to_string)
-            })
-            .flatten()
-            .unwrap_or_default();
+        let export_sym = symbols.export_symbol(graph, iface, show_types);
 
         if let Some(&first_idx) = chain.first() {
             if let Some(first_node) = graph.get_node(first_idx) {
                 output.push_str(&format!(
-                    "    export_{}([\"Export: {}{}\"]) --> {}\n",
+                    "    export_{}([\"Export: {short}{export_sym}\"]) --> {}\n",
                     sanitize_for_mermaid(iface),
-                    short,
-                    export_sym,
                     sanitize_for_mermaid(&first_node.name)
                 ));
             }
@@ -149,22 +353,10 @@ fn generate_handler_chain(
                 if let (Some(from_node), Some(to_node)) =
                     (graph.get_node(*from_idx), graph.get_node(*to_idx))
                 {
-                    let conn_sym: String = show_types
-                        .then(|| {
-                            from_node
-                                .imports
-                                .iter()
-                                .find(|c| &c.interface_name == iface)
-                                .and_then(|c| symbols.symbol_for_conn(c, &graph.arena))
-                                .map(str::to_string)
-                        })
-                        .flatten()
-                        .unwrap_or_default();
+                    let conn_sym = symbols.connection_symbol(graph, from_node, iface, show_types);
                     output.push_str(&format!(
-                        "    {} -->|\"{}{}\"| {}\n",
+                        "    {} -->|\"{short}{conn_sym}\"| {}\n",
                         sanitize_for_mermaid(&from_node.name),
-                        short,
-                        conn_sym,
                         sanitize_for_mermaid(&to_node.name)
                     ));
                 }
@@ -172,13 +364,10 @@ fn generate_handler_chain(
         }
     }
 
-    // Key subgraph — shared across all chains
     output.push_str(&render_key(&symbols));
-
     output
 }
 
-/// Generate a diagram showing all interface connections
 fn generate_all_interfaces(
     graph: &CompositionGraph,
     direction: Direction,
@@ -224,17 +413,11 @@ fn generate_all_interfaces(
             edge.fingerprint.as_deref(),
             edge.type_lines.clone(),
         );
-        if edge.is_dashed {
-            output.push_str(&format!(
-                "    {} -->|\"{}{}\"| {}\n",
-                from_id, edge.label, sym, to_id
-            ));
-        } else {
-            output.push_str(&format!(
-                "    {} ──>|\"{}{}\"| {}\n",
-                from_id, edge.label, sym, to_id
-            ));
-        }
+        let arrow = if edge.is_dashed { "-.->" } else { "-->" };
+        output.push_str(&format!(
+            "    {} {}|\"{}{}\"| {}\n",
+            from_id, arrow, edge.label, sym, to_id
+        ));
     }
 
     output.push('\n');
@@ -258,7 +441,6 @@ fn generate_all_interfaces(
     output
 }
 
-/// Generate a full diagram with all details
 fn generate_full(graph: &CompositionGraph, direction: Direction, show_types: bool) -> String {
     let view = build_full_view(graph, show_types);
     let mut output = format!("{INIT_DIRECTIVE}graph {}\n", direction.to_mermaid());
@@ -316,7 +498,6 @@ fn generate_full(graph: &CompositionGraph, direction: Direction, show_types: boo
     output
 }
 
-/// Sanitize a string for use as a Mermaid node ID
 fn sanitize_for_mermaid(s: &str) -> String {
     s.chars()
         .map(|c| {
@@ -334,101 +515,19 @@ fn sanitize_for_mermaid(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{
-        ComponentNode, FuncSignature, InstanceInterface, InterfaceConnection, InterfaceType,
-        ValueType,
-    };
+    use crate::highlights::Selection;
     use crate::output::Direction;
     use crate::test_utils::*;
-    use std::collections::BTreeMap;
-
-    /// Build a graph: host → $srv → $middleware → export(handler)
-    fn test_graph() -> CompositionGraph {
-        let mut graph = CompositionGraph::new();
-
-        let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
-        srv.add_import(InterfaceConnection {
-            interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: None,
-            is_host_import: true,
-            interface_type: None,
-            fingerprint: None,
-        });
-        graph.add_node(1, srv);
-
-        let mut mw = ComponentNode::new("$middleware".to_string(), 1, 1);
-        mw.add_import(InterfaceConnection {
-            interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: Some(1),
-            is_host_import: false,
-            interface_type: None,
-            fingerprint: None,
-        });
-        mw.add_import(InterfaceConnection {
-            interface_name: "wasi:logging/log@0.1.0".to_string(),
-            source_instance: None,
-            is_host_import: true,
-            interface_type: None,
-            fingerprint: None,
-        });
-        graph.add_node(2, mw);
-
-        graph.add_export("wasi:http/handler@0.3.0".to_string(), 2, None);
-        graph
-    }
-
-    /// Build a graph with real type information for type-display tests.
-    fn test_graph_with_types() -> CompositionGraph {
-        let mut graph = CompositionGraph::new();
-
-        let u32_id = graph.arena.intern_val(ValueType::U32);
-        let bool_id = graph.arena.intern_val(ValueType::Bool);
-
-        let handle_sig = FuncSignature {
-            is_async: false,
-            param_names: vec![],
-            params: vec![u32_id],
-            results: vec![bool_id],
-        };
-        let mut functions = BTreeMap::new();
-        functions.insert("handle".to_string(), handle_sig);
-        let iface_type = InterfaceType::Instance(InstanceInterface {
-            functions,
-            type_exports: BTreeMap::new(),
-        });
-
-        let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
-        srv.add_import(InterfaceConnection {
-            interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: None,
-            is_host_import: true,
-            interface_type: Some(iface_type.clone()),
-            fingerprint: Some(iface_type.fingerprint(&graph.arena)),
-        });
-        graph.add_node(1, srv);
-
-        let mut mw = ComponentNode::new("$middleware".to_string(), 1, 1);
-        mw.add_import(InterfaceConnection {
-            interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: Some(1),
-            is_host_import: false,
-            interface_type: Some(iface_type.clone()),
-            fingerprint: Some(iface_type.fingerprint(&graph.arena)),
-        });
-        graph.add_node(2, mw);
-
-        graph.add_export("wasi:http/handler@0.3.0".to_string(), 2, Some(iface_type));
-        graph
-    }
 
     #[test]
     fn test_handler_chain_mermaid() {
-        let graph = test_graph();
+        let graph = simple_chain_graph();
         let output = generate_mermaid(
             &graph,
             DetailLevel::HandlerChain,
             Direction::LeftToRight,
             false,
+            None,
         );
 
         assert!(
@@ -459,12 +558,13 @@ mod tests {
 
     #[test]
     fn test_all_interfaces_mermaid() {
-        let graph = test_graph();
+        let graph = simple_chain_graph();
         let output = generate_mermaid(
             &graph,
             DetailLevel::AllInterfaces,
             Direction::LeftToRight,
             false,
+            None,
         );
 
         assert!(output.contains("graph LR\n"));
@@ -488,15 +588,15 @@ mod tests {
             output.contains("-->"),
             "should have dashed host import edges"
         );
-        assert!(output.contains("──>|"), "should have solid instance edges");
+        assert!(output.contains("-->|"), "should have solid instance edges");
         // Export
         assert!(output.contains("Export"), "should have export");
     }
 
     #[test]
     fn test_full_mermaid() {
-        let graph = test_graph();
-        let output = generate_mermaid(&graph, DetailLevel::Full, Direction::TopDown, false);
+        let graph = simple_chain_graph();
+        let output = generate_mermaid(&graph, DetailLevel::Full, Direction::TopDown, false, None);
 
         assert!(output.contains("graph TD\n"), "should use TD direction");
         assert!(
@@ -519,6 +619,7 @@ mod tests {
             DetailLevel::HandlerChain,
             Direction::LeftToRight,
             false,
+            None,
         );
         assert!(chain.contains("No middleware chains found"));
 
@@ -527,49 +628,58 @@ mod tests {
             DetailLevel::AllInterfaces,
             Direction::LeftToRight,
             false,
+            None,
         );
         assert!(all.contains("No component instances found"));
     }
 
     #[test]
     fn test_show_types_all_interfaces() {
-        let graph = test_graph_with_types();
+        let graph = typed_chain_graph();
         let output = generate_mermaid(
             &graph,
             DetailLevel::AllInterfaces,
             Direction::LeftToRight,
             true,
+            None,
         );
 
         assert!(
-            output.contains("`handle`: (u32) -> bool"),
+            output.contains("'handle': (u32) -&gt; bool"),
             "should embed function signature in edge label"
         );
     }
 
     #[test]
     fn test_show_types_full() {
-        let graph = test_graph_with_types();
-        let output = generate_mermaid(&graph, DetailLevel::Full, Direction::LeftToRight, true);
+        let graph = typed_chain_graph();
+        let output = generate_mermaid(
+            &graph,
+            DetailLevel::Full,
+            Direction::LeftToRight,
+            true,
+            None,
+        );
 
         assert!(
-            output.contains("`handle`: (u32) -> bool"),
+            output.contains("'handle': (u32) -&gt; bool"),
             "should embed function signature in edge label"
         );
     }
 
     #[test]
     fn test_hide_types_mermaid() {
-        let graph = test_graph_with_types();
+        let graph = typed_chain_graph();
         let output = generate_mermaid(
             &graph,
             DetailLevel::AllInterfaces,
             Direction::LeftToRight,
             false,
+            None,
         );
 
         assert!(
-            !output.contains("`handle`: (u32) -> bool"),
+            !output.contains("'handle': (u32) -&gt; bool"),
             "should not show signatures when types disabled"
         );
     }
@@ -593,6 +703,7 @@ mod tests {
             DetailLevel::HandlerChain,
             Direction::LeftToRight,
             false,
+            None,
         );
         assert!(
             output.contains("Export: handler"),
@@ -612,6 +723,7 @@ mod tests {
             DetailLevel::HandlerChain,
             Direction::LeftToRight,
             false,
+            None,
         );
         // All four chain nodes should appear inside the composition subgraph
         assert!(output.contains("srv_http"), "should have srv-http node");
@@ -628,6 +740,7 @@ mod tests {
             DetailLevel::HandlerChain,
             Direction::LeftToRight,
             false,
+            None,
         );
         assert!(
             output.contains("-->|\"handler\"|"),
@@ -648,6 +761,7 @@ mod tests {
             DetailLevel::HandlerChain,
             Direction::LeftToRight,
             false,
+            None,
         );
         assert!(
             !chain_out.contains("logger"),
@@ -659,6 +773,7 @@ mod tests {
             DetailLevel::AllInterfaces,
             Direction::LeftToRight,
             false,
+            None,
         );
         assert!(
             all_out.contains("logger"),
@@ -678,6 +793,7 @@ mod tests {
             DetailLevel::HandlerChain,
             Direction::LeftToRight,
             false,
+            None,
         );
         assert!(output.contains("gateway"), "should show gateway node");
         assert!(output.contains("service"), "should show service node");
@@ -702,9 +818,10 @@ mod tests {
             DetailLevel::HandlerChain,
             Direction::LeftToRight,
             true,
+            None,
         );
         assert!(
-            output.contains("key[\"Key"),
+            output.contains("Signatures:"),
             "should have key node when show_types=true"
         );
     }
@@ -717,9 +834,10 @@ mod tests {
             DetailLevel::HandlerChain,
             Direction::LeftToRight,
             true,
+            None,
         );
         assert!(
-            output.contains("`handle`: (u32) -> bool"),
+            output.contains("'handle': (u32) -&gt; bool"),
             "key node should contain function signature"
         );
     }
@@ -732,14 +850,15 @@ mod tests {
             DetailLevel::HandlerChain,
             Direction::LeftToRight,
             true,
+            None,
         );
         // Two distinct types → two entries in the single key node (separated by \n in the label)
         let key_line = output
             .lines()
-            .find(|l| l.contains("key[\"Key"))
+            .find(|l| l.contains("Signatures:"))
             .expect("no key node");
         assert!(
-            key_line.matches("->").count() >= 2,
+            key_line.matches("-&gt;").count() >= 2,
             "key should contain two type entries, got: {key_line}"
         );
     }
@@ -756,6 +875,7 @@ mod tests {
             DetailLevel::AllInterfaces,
             Direction::LeftToRight,
             false,
+            None,
         );
         // Host interfaces use [] shape (not diamond) since we switched in the refactor
         assert!(
@@ -776,6 +896,7 @@ mod tests {
             DetailLevel::AllInterfaces,
             Direction::LeftToRight,
             false,
+            None,
         );
         assert!(
             output.contains("-->\"|\"handler\"|") || output.contains("-->|\"handler\"|"),
@@ -792,6 +913,7 @@ mod tests {
             DetailLevel::AllInterfaces,
             Direction::LeftToRight,
             false,
+            None,
         );
         // Export uses stadium shape ([" ... "])
         assert!(
@@ -809,9 +931,10 @@ mod tests {
             DetailLevel::HandlerChain,
             Direction::LeftToRight,
             false,
+            None,
         );
         assert!(
-            !output.contains("key[\"Key"),
+            !output.contains("Signatures:"),
             "no key node when show_types=false"
         );
     }
@@ -824,6 +947,7 @@ mod tests {
             DetailLevel::AllInterfaces,
             Direction::LeftToRight,
             false,
+            None,
         );
         // All 4 nodes in composition subgraph
         assert!(output.contains("srv_http"), "should have srv-http node");
@@ -858,7 +982,13 @@ mod tests {
         );
         graph.add_node(99, synthetic);
 
-        let output = generate_mermaid(&graph, DetailLevel::Full, Direction::LeftToRight, false);
+        let output = generate_mermaid(
+            &graph,
+            DetailLevel::Full,
+            Direction::LeftToRight,
+            false,
+            None,
+        );
         assert!(
             output.contains("synth"),
             "synthetic node should appear in Full output"
@@ -866,6 +996,160 @@ mod tests {
         assert!(
             output.contains("(synthetic)"),
             "synthetic node should be labelled as synthetic"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Highlights (Graph detail level only)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mermaid_graph_highlight_emits_classdef_and_class() {
+        let graph = simple_chain_graph();
+        let mut h = Highlights::default();
+        h.mark(Selection::node("srv"));
+        let output = generate_mermaid(
+            &graph,
+            DetailLevel::Graph,
+            Direction::LeftToRight,
+            false,
+            Some(&h),
+        );
+        assert!(
+            output.contains("classDef hl_yellow"),
+            "expected classDef for default-color highlight, got:\n{output}"
+        );
+        assert!(
+            output.contains("class n1 hl_yellow"),
+            "expected `class n1 hl_yellow` for srv (idx 1), got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn mermaid_graph_highlight_color_override() {
+        let graph = simple_chain_graph();
+        let mut h = Highlights::default();
+        h.mark(Selection::node("srv").color(HighlightColor::Orange));
+        let output = generate_mermaid(
+            &graph,
+            DetailLevel::Graph,
+            Direction::LeftToRight,
+            false,
+            Some(&h),
+        );
+        assert!(
+            output.contains("classDef hl_orange"),
+            "expected orange classDef, got:\n{output}"
+        );
+        assert!(
+            output.contains("class n1 hl_orange"),
+            "expected n1 in orange class, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn mermaid_graph_highlight_edge_emits_linkstyle() {
+        let graph = simple_chain_graph();
+        let mut h = Highlights::default();
+        h.register_tag(1, "drained").unwrap();
+        h.mark(Selection::edge("wasi:http/handler@0.3.0::middleware->srv").tag(1));
+        let output = generate_mermaid(
+            &graph,
+            DetailLevel::Graph,
+            Direction::LeftToRight,
+            false,
+            Some(&h),
+        );
+        assert!(
+            output.contains("linkStyle"),
+            "expected linkStyle for highlighted edge, got:\n{output}"
+        );
+        // Bracket label appears on edge text — escape_mermaid_label
+        // converts `[`/`]` to Unicode lookalikes (`⟦`/`⟧`) so marked.js
+        // doesn't read them as markdown link syntax and so the entities
+        // survive downstream markdown pipelines that strip `&#91;`.
+        assert!(
+            output.contains("handler⟦1⟧"),
+            "expected `handler⟦1⟧` on edge label, got:\n{output}"
+        );
+        // Tag list in the key node
+        assert!(
+            output.contains("Tags:"),
+            "expected Tags in key node, got:\n{output}"
+        );
+        assert!(
+            output.contains("1 drained"),
+            "missing tag entry, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn mermaid_graph_no_highlights_no_extra_styles() {
+        let graph = simple_chain_graph();
+        let output = generate_mermaid(
+            &graph,
+            DetailLevel::Graph,
+            Direction::LeftToRight,
+            false,
+            None,
+        );
+        assert!(
+            !output.contains("classDef hl_"),
+            "should not emit highlight classDefs when no highlights given"
+        );
+        assert!(
+            !output.contains("linkStyle"),
+            "should not emit linkStyle without highlights"
+        );
+        assert!(!output.contains("Tags:"));
+    }
+
+    #[test]
+    fn mermaid_graph_highlight_wins_over_shared_class() {
+        // Reuse the shared-instance fixture used by the ASCII test.  When
+        // `logger` is highlighted in the second cluster, the emitted class
+        // should be `hl_*` (not `shared`).
+        use crate::model::{ComponentNode, CompositionGraph, InterfaceConnection};
+        let mut g = CompositionGraph::new();
+        g.add_node(1, ComponentNode::new("$logger".into(), 0, 0));
+        let mut srv = ComponentNode::new("$srv-http".into(), 1, 1);
+        srv.add_import(InterfaceConnection {
+            interface_name: "wasi:logging/log@0.1.0".into(),
+            source_instance: Some(1),
+            is_host_import: false,
+            interface_type: None,
+            fingerprint: None,
+        });
+        g.add_node(2, srv);
+        let mut cache = ComponentNode::new("$cache".into(), 2, 2);
+        cache.add_import(InterfaceConnection {
+            interface_name: "wasi:logging/log@0.1.0".into(),
+            source_instance: Some(1),
+            is_host_import: false,
+            interface_type: None,
+            fingerprint: None,
+        });
+        g.add_node(3, cache);
+        g.add_export("wasi:http/handler@0.3.0".into(), 2, None);
+        g.add_export("wasi:keyvalue/store@0.1.0".into(), 3, None);
+
+        let mut h = Highlights::default();
+        h.mark(Selection::node("logger"));
+        let output = generate_mermaid(
+            &g,
+            DetailLevel::Graph,
+            Direction::LeftToRight,
+            false,
+            Some(&h),
+        );
+        // logger (n1) should be in the hl_* class, not the shared class.
+        assert!(
+            output.contains("class n1 hl_yellow"),
+            "logger should be highlighted, got:\n{output}"
+        );
+        assert!(
+            !output.contains("class n1 shared"),
+            "highlight should override shared class for logger, got:\n{output}"
         );
     }
 }
