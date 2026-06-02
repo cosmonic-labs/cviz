@@ -39,16 +39,18 @@ struct Args {
 
     /// Highlight a node or edge in the graph view.  Repeatable.  Format:
     ///
-    ///   node:<id>[=<context>][@<color>]
-    ///   edge:<id>[=<context>][@<color>]
+    ///   node:<id>[=<context>][>><color>]
+    ///   edge:<id>[=<context>][>><color>]
     ///
     /// Examples:
     ///   --highlight node:srv
     ///   --highlight 'node:srv=outdated'
-    ///   --highlight 'edge:wasi:http/handler@0.3.0::middleware->srv=drained@orange'
+    ///   --highlight 'edge:wasi:http/handler@0.3.0::middleware->srv=drained>>orange'
     ///
-    /// Colors: yellow (default), cyan, magenta, blue, orange, white.
-    /// Only the `graph` detail level renders highlights.
+    /// Colors: yellow (default), cyan, magenta, blue, orange, red,
+    /// green, white.  (Red and green together are confusable for ~5% of
+    /// readers — pick distinct hues when designing for a colorblind
+    /// audience.)  Only the `graph` detail level renders highlights.
     #[arg(long = "highlight", value_name = "SPEC", action = clap::ArgAction::Append)]
     highlight: Vec<String>,
 
@@ -75,12 +77,7 @@ fn main() -> Result<()> {
     let graph = cviz::parse::component::parse_component(&bytes)
         .with_context(|| format!("Failed to parse component: {}", args.file.display()))?;
 
-    let mut highlights = Highlights::new();
-    // CLI-side ctx→tag-id map so consecutive `--highlight` flags that
-    // mention the same context string reuse the same tag number rather
-    // than each getting their own.  Auto-assigned in insertion order
-    // (first new ctx → 0, next → 1, …) so the in-diagram brackets line
-    // up with the Tags list under the rendering.
+    let mut highlights = Highlights::default();
     let mut ctx_to_tag: BTreeMap<String, u32> = BTreeMap::new();
     for spec in &args.highlight {
         parse_highlight_spec(spec, &mut highlights, &mut ctx_to_tag)
@@ -173,46 +170,20 @@ fn main() -> Result<()> {
 }
 
 /// Parse one `--highlight` value of the form
-/// `node:<id>[=<ctx>][@<color>]` or `edge:<id>[=<ctx>][@<color>]` and
+/// `node:<id>[=<ctx>][>><color>]` or `edge:<id>[=<ctx>][>><color>]` and
 /// register it into `out`.
-///
-/// `<id>` may contain `::`, `->`, etc. (canonical edge IDs do); the
-/// parser splits on the **first** `:` for the kind and recognises the
-/// **last unescaped** `@<color>` as the optional trailing color override.
 fn parse_highlight_spec(
     spec: &str,
     out: &mut Highlights,
     ctx_to_tag: &mut BTreeMap<String, u32>,
 ) -> Result<()> {
-    let (kind, rest) = spec
-        .split_once(':')
-        .ok_or_else(|| anyhow!("missing `kind:` prefix; expected `node:` or `edge:`"))?;
-
-    // Detect an optional `@<color>` color override at the very end.
-    //
-    // Canonical edge IDs already contain `@` inside the interface version
-    // (`wasi:http/handler@0.3.0::...`), so a naive "split on the last `@`"
-    // would munch the version.  Instead we only treat the trailing chunk
-    // as a color suffix when it's a pure ASCII-letter word.  The version
-    // tail (digits + dots + `::` + arrow) never matches that, so it's
-    // safely left alone.  A user who wants `@` in a context value can
-    // backslash-escape it (`\@`).
-    let (id_and_ctx_raw, color) = split_color_suffix(rest)?;
-    let id_and_ctx = id_and_ctx_raw.replace("\\@", "@");
-
-    let (id, ctx) = match id_and_ctx.split_once('=') {
-        Some((id, ctx)) => (id.to_string(), Some(ctx.to_string())),
-        None => (id_and_ctx, None),
+    let (without_color, color) = split_color_suffix(spec)?;
+    let (kind_id, ctx) = match without_color.split_once('=') {
+        Some((k, c)) => (k.to_string(), Some(c.to_string())),
+        None => (without_color, None),
     };
-    if id.is_empty() {
-        return Err(anyhow!("id is empty"));
-    }
 
-    let mut sel = match kind {
-        "node" => Selection::node(id),
-        "edge" => Selection::edge(id),
-        k => return Err(anyhow!("unknown kind `{k}`; expected `node` or `edge`")),
-    };
+    let mut sel: Selection = kind_id.parse().map_err(|e| anyhow!("{e}"))?;
     if let Some(ctx) = ctx {
         let tag_id = match ctx_to_tag.get(&ctx) {
             Some(&existing) => existing,
@@ -233,53 +204,14 @@ fn parse_highlight_spec(
     Ok(())
 }
 
-/// Look for an `@<color>` suffix at the very end of `rest`.
-///
-/// Returns `(prefix, Some(color))` when the trailing `@<word>` is
-/// composed of ASCII letters only and parses as a known color name.
-/// Returns `(rest_to_string, None)` when:
-/// - there's no `@` at all, or
-/// - the trailing `@` is backslash-escaped (`\@`), or
-/// - the trailing chunk after `@` contains non-letters (e.g. the version
-///   tail of a canonical edge id like `wasi:http/handler@0.3.0::...`).
-///
-/// Errors only when the trailing chunk is letter-only but isn't a valid
-/// color — that's the "user typo" path.
+/// Look for a `>><color>` suffix at the very end of `rest`.
 fn split_color_suffix(rest: &str) -> Result<(String, Option<HighlightColor>)> {
-    let bytes = rest.as_bytes();
-    let Some(at_idx) = rest.rfind('@') else {
-        return Ok((rest.to_string(), None));
-    };
-    // Backslash-escaped → not a color suffix.
-    let preceding_backslashes = bytes[..at_idx]
-        .iter()
-        .rev()
-        .take_while(|&&b| b == b'\\')
-        .count();
-    if preceding_backslashes % 2 == 1 {
-        return Ok((rest.to_string(), None));
-    }
-    let suffix = &rest[at_idx + 1..];
-    let is_letter_word = !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_alphabetic());
-    if !is_letter_word {
-        // Looks like part of an id (e.g. interface version), leave it alone.
-        return Ok((rest.to_string(), None));
-    }
-    let color = parse_color(suffix)?;
-    Ok((rest[..at_idx].to_string(), Some(color)))
-}
-
-fn parse_color(s: &str) -> Result<HighlightColor> {
-    match s.to_ascii_lowercase().as_str() {
-        "yellow" => Ok(HighlightColor::Yellow),
-        "cyan" => Ok(HighlightColor::Cyan),
-        "magenta" => Ok(HighlightColor::Magenta),
-        "blue" => Ok(HighlightColor::Blue),
-        "orange" => Ok(HighlightColor::Orange),
-        "white" => Ok(HighlightColor::White),
-        other => Err(anyhow!(
-            "unknown color `{other}`; valid: yellow, cyan, magenta, blue, orange, white"
-        )),
+    match rest.rsplit_once(">>") {
+        Some((prefix, suffix)) => {
+            let color: HighlightColor = suffix.parse().map_err(|e| anyhow!("{e}"))?;
+            Ok((prefix.to_string(), Some(color)))
+        }
+        None => Ok((rest.to_string(), None)),
     }
 }
 
@@ -307,7 +239,7 @@ mod tests {
     /// empty Highlights / tag map.  Most tests don't need state across
     /// multiple specs.
     fn parse_one(spec: &str) -> Result<Highlights> {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         let mut map = BTreeMap::new();
         parse_highlight_spec(spec, &mut h, &mut map)?;
         Ok(h)
@@ -330,13 +262,13 @@ mod tests {
 
     #[test]
     fn parse_highlight_node_with_color() {
-        let h = parse_one("node:srv@orange").unwrap();
+        let h = parse_one("node:srv>>orange").unwrap();
         assert_eq!(h.node_color("srv"), Some(HighlightColor::Orange));
     }
 
     #[test]
     fn parse_highlight_node_full() {
-        let h = parse_one("node:srv=outdated@cyan").unwrap();
+        let h = parse_one("node:srv=outdated>>cyan").unwrap();
         assert_eq!(h.node_color("srv"), Some(HighlightColor::Cyan));
         assert_eq!(h.node_tag_ids("srv"), vec![0]);
     }
@@ -344,7 +276,9 @@ mod tests {
     #[test]
     fn parse_highlight_edge_with_canonical_id() {
         let h = parse_one("edge:wasi:http/handler@0.3.0::middleware->srv=drained").unwrap();
-        // The `@0.3.0` should NOT be parsed as a color — it's part of the id.
+        // The `@0.3.0` inside the id is no longer load-bearing on the
+        // color-suffix detection (`>>` is the delimiter now), but this
+        // test still guards that a canonical edge id parses cleanly.
         assert!(h.is_edge_highlighted("wasi:http/handler@0.3.0::middleware->srv"));
         assert_eq!(
             h.edge_tag_ids("wasi:http/handler@0.3.0::middleware->srv"),
@@ -354,7 +288,7 @@ mod tests {
 
     #[test]
     fn parse_highlight_edge_with_color_and_canonical_id() {
-        let h = parse_one("edge:wasi:http/handler@0.3.0::middleware->srv=drained@orange").unwrap();
+        let h = parse_one("edge:wasi:http/handler@0.3.0::middleware->srv=drained>>orange").unwrap();
         assert_eq!(
             h.edge_color("wasi:http/handler@0.3.0::middleware->srv"),
             Some(HighlightColor::Orange)
@@ -362,9 +296,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_highlight_escaped_at_in_context() {
-        // Backslash escapes `@` so it ends up in the context.
-        let h = parse_one("node:srv=tag\\@v2").unwrap();
+    fn parse_highlight_at_in_context_needs_no_escape() {
+        // `@` is no longer a color delimiter, so a context containing `@`
+        // just works — no backslash escape needed.
+        let h = parse_one("node:srv=tag@v2").unwrap();
         assert_eq!(h.tag_lines(), vec!["0 tag@v2".to_string()]);
         assert_eq!(h.node_color("srv"), Some(HighlightColor::Yellow));
     }
@@ -373,7 +308,7 @@ mod tests {
     fn parse_highlight_repeated_ctx_reuses_tag_id() {
         // First spec assigns tag 0 to "drained"; second spec mentions the
         // same context and should reuse 0 rather than mint 1.
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         let mut map = BTreeMap::new();
         parse_highlight_spec("node:srv=drained", &mut h, &mut map).unwrap();
         parse_highlight_spec("edge:e1::a->b=drained", &mut h, &mut map).unwrap();
@@ -384,7 +319,7 @@ mod tests {
 
     #[test]
     fn parse_highlight_distinct_ctxs_get_distinct_ids() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         let mut map = BTreeMap::new();
         parse_highlight_spec("node:srv=outdated", &mut h, &mut map).unwrap();
         parse_highlight_spec("edge:e1::a->b=drained", &mut h, &mut map).unwrap();
@@ -404,6 +339,6 @@ mod tests {
 
     #[test]
     fn parse_highlight_rejects_bad_color() {
-        assert!(parse_one("node:srv@chartreuse").is_err());
+        assert!(parse_one("node:srv>>chartreuse").is_err());
     }
 }

@@ -1713,7 +1713,7 @@ mod tests {
     fn highlighted_node_uses_heavy_box() {
         // mark srv → its box should render with `┏━┓ ┃ ┃ ┗━┛`.
         let g = simple_chain_graph();
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.mark(Selection::node("srv"));
         let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
         assert!(
@@ -1751,7 +1751,7 @@ mod tests {
         g.add_export("wasi:http/handler@0.3.0".into(), 2, None);
         g.add_export("wasi:keyvalue/store@0.1.0".into(), 3, None);
 
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.mark(Selection::node("logger"));
         let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
         // Heavy chars present (highlight applied).
@@ -1768,7 +1768,7 @@ mod tests {
     #[test]
     fn highlighted_edge_label_carries_tag_bracket() {
         let g = simple_chain_graph();
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.register_tag(1, "drained").unwrap();
         h.mark(Selection::edge("wasi:http/handler@0.3.0::middleware->srv").tag(1));
         let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
@@ -1781,7 +1781,7 @@ mod tests {
     #[test]
     fn highlighted_node_label_carries_tag_bracket() {
         let g = simple_chain_graph();
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.register_tag(1, "outdated").unwrap();
         h.mark(Selection::node("srv").tag(1));
         let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
@@ -1794,7 +1794,7 @@ mod tests {
     #[test]
     fn tags_appended_when_highlights_have_tags() {
         let g = simple_chain_graph();
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.register_tags([(1, "outdated"), (2, "drained")]).unwrap();
         h.mark(Selection::node("srv").tag(1));
         h.mark(Selection::edge("wasi:http/handler@0.3.0::middleware->srv").tag(2));
@@ -1808,7 +1808,7 @@ mod tests {
     fn no_tags_section_when_no_tags_registered() {
         // mark with no tags attached should not produce a Tags section.
         let g = simple_chain_graph();
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.mark(Selection::node("srv"));
         let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
         assert!(
@@ -1820,7 +1820,7 @@ mod tests {
     #[test]
     fn use_color_wraps_highlighted_cells_in_ansi() {
         let g = simple_chain_graph();
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.mark(Selection::node("srv"));
         let plain = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
         let colored = generate_graph_ascii(&g, false, None, Some(&h), true).ascii;
@@ -1837,7 +1837,7 @@ mod tests {
     #[test]
     fn unmatched_highlight_ids_surface_on_output() {
         let g = simple_chain_graph();
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.mark(Selection::node("srv")); // real
         h.mark(Selection::node("middlewre")); // typo
         h.mark(Selection::edge("nope::a->b")); // typo
@@ -1858,7 +1858,7 @@ mod tests {
         // canonical_edge_id("...handler...", None, "middleware").  Highlight
         // it and confirm the bracket label shows on the export marker.
         let g = simple_chain_graph();
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.register_tag(1, "ingress").unwrap();
         h.mark(Selection::edge("wasi:http/handler@0.3.0::->middleware").tag(1));
         let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;

@@ -69,8 +69,7 @@ fn generate_graph(
     if let Some(h) = highlights {
         for color in h.colors_used() {
             output.push_str(&format!(
-                "    classDef hl_{} fill:{},stroke:#333,stroke-width:3px\n",
-                color.slug(),
+                "    classDef hl_{color} fill:{},stroke:#333,stroke-width:3px\n",
                 color.mermaid_hex(),
             ));
         }
@@ -114,7 +113,7 @@ fn generate_graph(
             // Highlight wins over shared (matches the ASCII renderer).
             let node_hl = highlights.and_then(|h| h.node_color(node.canonical_id()));
             if let Some(color) = node_hl {
-                output.push_str(&format!("        class {} hl_{}\n", node_id, color.slug()));
+                output.push_str(&format!("        class {node_id} hl_{color}\n"));
             } else if shared.contains(&idx) && idx != sg.source_instance {
                 output.push_str(&format!("        class {} shared\n", node_id));
             }
@@ -1253,7 +1252,7 @@ mod tests {
     #[test]
     fn mermaid_graph_highlight_emits_classdef_and_class() {
         let graph = simple_chain_graph();
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.mark(Selection::node("srv"));
         let output = generate_mermaid(
             &graph,
@@ -1275,7 +1274,7 @@ mod tests {
     #[test]
     fn mermaid_graph_highlight_color_override() {
         let graph = simple_chain_graph();
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.mark(Selection::node("srv").color(HighlightColor::Orange));
         let output = generate_mermaid(
             &graph,
@@ -1297,7 +1296,7 @@ mod tests {
     #[test]
     fn mermaid_graph_highlight_edge_emits_linkstyle() {
         let graph = simple_chain_graph();
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.register_tag(1, "drained").unwrap();
         h.mark(Selection::edge("wasi:http/handler@0.3.0::middleware->srv").tag(1));
         let output = generate_mermaid(
@@ -1380,7 +1379,7 @@ mod tests {
         g.add_export("wasi:http/handler@0.3.0".into(), 2, None);
         g.add_export("wasi:keyvalue/store@0.1.0".into(), 3, None);
 
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.mark(Selection::node("logger"));
         let output = generate_mermaid(
             &g,

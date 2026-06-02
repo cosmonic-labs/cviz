@@ -1,50 +1,17 @@
 //! Caller-supplied emphasis ("highlight these nodes/edges, and here's why")
 //! that the graph renderers consume.
 //!
-//! Identity is by **canonical ID strings** (see [`canonical_id`]).  A caller
-//! such as splicer computes which nodes and edges its YAML rules would touch,
-//! stuffs the canonical IDs into a [`Highlights`], and hands it to cviz —
-//! cviz then surfaces the emphasis in whichever output format it's asked to
-//! produce.
-//!
-//! # Shape
-//!
-//! Two concepts:
-//!
-//! - **Tags** are `(tag_id: u32, ctx: String)` pairs the consumer registers
-//!   up front via [`Highlights::register_tag`] (or
-//!   [`Highlights::register_tags`] for a batch).  Tag IDs are consumer-owned
-//!   — splicer's rule #5 can register as tag 5 and that's the number the
-//!   renderer draws.
-//! - **Selections** are nodes or edges the consumer highlights via
-//!   [`Highlights::mark`], passing a [`Selection`] built with
-//!   [`Selection::node`] / [`Selection::edge`], optionally attaching tags
-//!   with [`Selection::tag`] / [`Selection::tags`] and an explicit color
-//!   with [`Selection::color`].
-//!
-//! A selection with no tags is just an emphasized highlight (no `[N]`
-//! bracket, no entry in the Tags list).  A selection with tags references
-//! ones previously registered — citing an unknown tag id is a consumer
-//! bug and panics at [`Highlights::mark`] time.
-//!
-//! # Colors
-//!
-//! Every selection has an effective [`HighlightColor`].  If the builder
-//! didn't call [`Selection::color`], the renderer uses
-//! [`HighlightColor::Yellow`] (a colorblind-safe default).  Consumers that
-//! want to colorize different selections distinctly call `.color(...)` on
-//! the relevant selections.
+//! Identity is by **canonical ID strings** (see [`canonical_id`]). A caller
+//! computes which nodes and edges its YAML rules would touch, stuffs the
+//! canonical IDs into a [`Highlights`], and hands it to cviz. It then surfaces
+//! the emphasis in whichever output format it's asked to produce.
 //!
 //! [`canonical_id`]: crate::canonical_id
 
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Color applied to a highlighted node or edge.
-///
-/// Used by ANSI-aware renderers to colorize the emphasis.  Picked from a
-/// colorblind-safe palette — there is no pure red/green pair.  The default
-/// is [`HighlightColor::Yellow`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum HighlightColor {
     #[default]
     Yellow,
@@ -52,10 +19,46 @@ pub enum HighlightColor {
     Magenta,
     Blue,
     Orange,
+    Red,
+    Green,
     White,
+}
+impl std::fmt::Display for HighlightColor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            HighlightColor::Yellow => "yellow",
+            HighlightColor::Cyan => "cyan",
+            HighlightColor::Magenta => "magenta",
+            HighlightColor::Blue => "blue",
+            HighlightColor::Orange => "orange",
+            HighlightColor::Red => "red",
+            HighlightColor::Green => "green",
+            HighlightColor::White => "white",
+        };
+        f.write_str(name)
+    }
+}
+impl std::str::FromStr for HighlightColor {
+    type Err = UnknownColor;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "yellow" => Ok(HighlightColor::Yellow),
+            "cyan" => Ok(HighlightColor::Cyan),
+            "magenta" => Ok(HighlightColor::Magenta),
+            "blue" => Ok(HighlightColor::Blue),
+            "orange" => Ok(HighlightColor::Orange),
+            "red" => Ok(HighlightColor::Red),
+            "green" => Ok(HighlightColor::Green),
+            "white" => Ok(HighlightColor::White),
+            other => Err(UnknownColor(other.to_string())),
+        }
+    }
 }
 
 impl HighlightColor {
+    /// ANSI SGR reset.  Closes any of the [`Self::ansi_open`] sequences.
+    pub const ANSI_RESET: &'static str = "\x1b[0m";
+
     /// ANSI SGR sequence that opens bold + this color.  Pair with
     /// [`Self::ANSI_RESET`].
     pub fn ansi_open(self) -> &'static str {
@@ -64,18 +67,13 @@ impl HighlightColor {
             HighlightColor::Cyan => "\x1b[1;36m",
             HighlightColor::Magenta => "\x1b[1;35m",
             HighlightColor::Blue => "\x1b[1;34m",
-            // 38;5;208 is a 256-color orange; broadly supported on modern
-            // terminals, no red/green confusion.
             HighlightColor::Orange => "\x1b[1;38;5;208m",
+            HighlightColor::Red => "\x1b[1;31m",
+            HighlightColor::Green => "\x1b[1;32m",
             HighlightColor::White => "\x1b[1;97m",
         }
     }
 
-    /// ANSI SGR reset.  Closes any of the [`Self::ansi_open`] sequences.
-    pub const ANSI_RESET: &'static str = "\x1b[0m";
-
-    /// Mermaid `stroke:` hex value for this color.  Used by the Mermaid
-    /// renderer when it writes a `classDef` for a highlighted selection.
     pub fn mermaid_hex(self) -> &'static str {
         match self {
             HighlightColor::Yellow => "#d4a017",
@@ -83,33 +81,20 @@ impl HighlightColor {
             HighlightColor::Magenta => "#a3338f",
             HighlightColor::Blue => "#2c5fb3",
             HighlightColor::Orange => "#d97706",
+            HighlightColor::Red => "#c41818",
+            HighlightColor::Green => "#2d8a3e",
             HighlightColor::White => "#cccccc",
-        }
-    }
-
-    /// Short kebab-case name, used as a stable key for Mermaid classDef
-    /// identifiers (`hl_yellow`, `hl_orange`, …).
-    pub fn slug(self) -> &'static str {
-        match self {
-            HighlightColor::Yellow => "yellow",
-            HighlightColor::Cyan => "cyan",
-            HighlightColor::Magenta => "magenta",
-            HighlightColor::Blue => "blue",
-            HighlightColor::Orange => "orange",
-            HighlightColor::White => "white",
         }
     }
 }
 
-/// Returned by [`Highlights::register_tag`] when a tag id is already
-/// registered to a different context string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagConflict {
     pub tag_id: u32,
     pub existing_ctx: String,
     pub new_ctx: String,
 }
-
+impl std::error::Error for TagConflict {}
 impl std::fmt::Display for TagConflict {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -120,9 +105,36 @@ impl std::fmt::Display for TagConflict {
     }
 }
 
-impl std::error::Error for TagConflict {}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownColor(pub String);
+impl std::error::Error for UnknownColor {}
+impl std::fmt::Display for UnknownColor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unknown color `{}`; valid: yellow, cyan, magenta, blue, orange, red, green, white",
+            self.0,
+        )
+    }
+}
 
-/// What the [`Selection`] builder is producing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectionParseError {
+    MissingKind,
+    EmptyId,
+    UnknownKind(String),
+}
+impl std::error::Error for SelectionParseError {}
+impl std::fmt::Display for SelectionParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingKind => write!(f, "missing `kind:` prefix; expected `node:` or `edge:`"),
+            Self::EmptyId => write!(f, "id is empty"),
+            Self::UnknownKind(k) => write!(f, "unknown kind `{k}`; expected `node` or `edge`"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SelectionKind {
     Node,
@@ -133,7 +145,7 @@ enum SelectionKind {
 ///
 /// Construct via [`Selection::node`] or [`Selection::edge`], chain
 /// `.tag(...)` / `.tags(...)` / `.color(...)` to attach metadata, and pass
-/// to [`Highlights::add`].
+/// to [`Highlights::mark`].
 #[derive(Debug, Clone)]
 pub struct Selection {
     kind: SelectionKind,
@@ -189,6 +201,22 @@ impl Selection {
     }
 }
 
+/// Parse a `node:<id>` or `edge:<id>` string into a [`Selection`].
+impl std::str::FromStr for Selection {
+    type Err = SelectionParseError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (kind, id) = s.split_once(':').ok_or(SelectionParseError::MissingKind)?;
+        if id.is_empty() {
+            return Err(SelectionParseError::EmptyId);
+        }
+        match kind {
+            "node" => Ok(Selection::node(id)),
+            "edge" => Ok(Selection::edge(id)),
+            other => Err(SelectionParseError::UnknownKind(other.to_string())),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct StoredSelection {
     tags: Vec<u32>,
@@ -197,23 +225,15 @@ struct StoredSelection {
 
 /// A set of highlighted node and edge IDs, plus a tag pool the consumer
 /// owns and an optional per-selection color.
-///
-/// See the [module docs](self) for the registration-and-add flow, the
-/// tag-id ownership contract, and the color contract.
 #[derive(Debug, Clone, Default)]
 pub struct Highlights {
     nodes: BTreeMap<String, StoredSelection>,
     edges: BTreeMap<String, StoredSelection>,
-    /// Consumer-registered (id → ctx) tag pool.
+    /// Consumer-registered (id -> ctx) tag pool.
     tags: BTreeMap<u32, String>,
 }
 
 impl Highlights {
-    /// New empty [`Highlights`].  Equivalent to [`Highlights::default`].
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Register a single tag.
     ///
     /// `tag_id` is the consumer-chosen number that the renderer will draw
@@ -239,7 +259,7 @@ impl Highlights {
         Ok(())
     }
 
-    /// Register a batch of tags.  Stops at the first conflict and returns
+    /// Register a batch of tags. Stops at the first conflict and returns
     /// it; any tags before the conflict are still registered (so callers
     /// who want all-or-nothing semantics should validate up front).
     pub fn register_tags<I, S>(&mut self, tags: I) -> Result<(), TagConflict>
@@ -256,9 +276,7 @@ impl Highlights {
     /// Mark a node or edge as highlighted, applying the metadata in the
     /// built [`Selection`].
     ///
-    /// Panics if `selection` cites a tag id that hasn't been registered —
-    /// that's a consumer bug (you cited a tag you didn't register),
-    /// not a runtime condition worth `Result`-threading.
+    /// Panics if `selection` cites a tag id that hasn't been registered.
     ///
     /// Re-marking the same id (node or edge) replaces the previous tags
     /// and color for that id — later writes win.
@@ -391,13 +409,12 @@ impl Highlights {
         !self.tags.is_empty()
     }
 
-    /// Distinct colors used across all selections.  Mermaid uses this to
-    /// emit one `classDef` per color actually in use.
+    /// Distinct colors used across all selections.
     pub fn colors_used(&self) -> Vec<HighlightColor> {
-        let mut seen: BTreeSet<&'static str> = BTreeSet::new();
+        let mut seen: BTreeSet<HighlightColor> = BTreeSet::new();
         let mut out: Vec<HighlightColor> = Vec::new();
         for sel in self.nodes.values().chain(self.edges.values()) {
-            if seen.insert(sel.color.slug()) {
+            if seen.insert(sel.color) {
                 out.push(sel.color);
             }
         }
@@ -450,7 +467,7 @@ mod tests {
 
     #[test]
     fn empty_by_default() {
-        let h = Highlights::new();
+        let h = Highlights::default();
         assert!(h.is_empty());
         assert!(!h.has_tags());
         assert!(h.tag_lines().is_empty());
@@ -459,7 +476,7 @@ mod tests {
 
     #[test]
     fn highlight_no_tags_no_color() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.mark(Selection::node("srv"));
         assert!(h.is_node_highlighted("srv"));
         assert!(h.node_tag_ids("srv").is_empty());
@@ -469,7 +486,7 @@ mod tests {
 
     #[test]
     fn register_then_attach() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.register_tag(1, "outdated").unwrap();
         h.mark(Selection::node("srv").tag(1));
         assert_eq!(h.node_tag_ids("srv"), vec![1]);
@@ -478,7 +495,7 @@ mod tests {
 
     #[test]
     fn consumer_chosen_tag_ids() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.register_tags([(5, "spliced"), (8, "drained")]).unwrap();
         h.mark(Selection::node("srv").tag(5));
         h.mark(Selection::edge("a::b->c").tags([5, 8]));
@@ -493,7 +510,7 @@ mod tests {
 
     #[test]
     fn duplicate_tags_on_same_selection_dedupe() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.register_tag(1, "outdated").unwrap();
         h.mark(Selection::node("srv").tag(1).tag(1));
         assert_eq!(h.node_tag_ids("srv"), vec![1]);
@@ -501,7 +518,7 @@ mod tests {
 
     #[test]
     fn register_tag_idempotent_same_ctx() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.register_tag(5, "spliced").unwrap();
         h.register_tag(5, "spliced").unwrap();
         assert_eq!(h.tag_lines(), vec!["5 spliced".to_string()]);
@@ -509,7 +526,7 @@ mod tests {
 
     #[test]
     fn register_tag_conflict_returns_err() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.register_tag(5, "spliced").unwrap();
         let err = h.register_tag(5, "different").unwrap_err();
         assert_eq!(err.tag_id, 5);
@@ -520,13 +537,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "unregistered tag id 99")]
     fn mark_with_unregistered_tag_panics() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.mark(Selection::node("srv").tag(99));
     }
 
     #[test]
     fn color_override_per_selection() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.mark(Selection::node("srv").color(HighlightColor::Orange));
         h.mark(Selection::edge("a::b->c").color(HighlightColor::Cyan));
         assert_eq!(h.node_color("srv"), Some(HighlightColor::Orange));
@@ -539,7 +556,7 @@ mod tests {
 
     #[test]
     fn re_marking_same_id_replaces_previous() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.register_tag(1, "outdated").unwrap();
         h.register_tag(2, "drained").unwrap();
         h.mark(Selection::node("srv").tag(1));
@@ -550,7 +567,7 @@ mod tests {
 
     #[test]
     fn default_color_is_yellow() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.mark(Selection::node("srv"));
         h.mark(Selection::edge("a::b->c"));
         assert_eq!(h.node_color("srv"), Some(HighlightColor::Yellow));
@@ -559,7 +576,7 @@ mod tests {
 
     #[test]
     fn tag_lines_referenced_by_filters_unmatched() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.register_tags([(1, "spliced"), (2, "sup")]).unwrap();
         h.mark(Selection::node("real").tag(2));
         h.mark(Selection::edge("bogus::a->b").tag(1));
@@ -570,7 +587,7 @@ mod tests {
 
     #[test]
     fn tag_lines_sorted_by_id() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.register_tags([(10, "ten"), (3, "three"), (7, "seven")])
             .unwrap();
         assert_eq!(
@@ -591,6 +608,8 @@ mod tests {
             HighlightColor::Magenta,
             HighlightColor::Blue,
             HighlightColor::Orange,
+            HighlightColor::Red,
+            HighlightColor::Green,
             HighlightColor::White,
         ];
         let mut opens: BTreeSet<&'static str> = BTreeSet::new();
@@ -598,6 +617,36 @@ mod tests {
             assert!(!c.ansi_open().is_empty());
             assert!(opens.insert(c.ansi_open()), "duplicate ansi for {:?}", c);
         }
+    }
+
+    #[test]
+    fn from_str_parses_every_color() {
+        for (name, expected) in [
+            ("yellow", HighlightColor::Yellow),
+            ("cyan", HighlightColor::Cyan),
+            ("magenta", HighlightColor::Magenta),
+            ("blue", HighlightColor::Blue),
+            ("orange", HighlightColor::Orange),
+            ("red", HighlightColor::Red),
+            ("green", HighlightColor::Green),
+            ("white", HighlightColor::White),
+        ] {
+            assert_eq!(name.parse::<HighlightColor>().unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn from_str_is_case_insensitive() {
+        assert_eq!(
+            "RED".parse::<HighlightColor>().unwrap(),
+            HighlightColor::Red
+        );
+    }
+
+    #[test]
+    fn from_str_rejects_unknown_color() {
+        let err = "chartreuse".parse::<HighlightColor>().unwrap_err();
+        assert_eq!(err, UnknownColor("chartreuse".to_string()));
     }
 
     #[test]
@@ -609,7 +658,7 @@ mod tests {
 
     #[test]
     fn unmatched_node_ids_reports_typos() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.mark(Selection::node("srv"));
         h.mark(Selection::node("middlewre"));
         let unmatched: Vec<&str> = h.unmatched_node_ids(["srv", "middleware"].iter().copied());
@@ -618,7 +667,7 @@ mod tests {
 
     #[test]
     fn unmatched_edge_ids_reports_typos() {
-        let mut h = Highlights::new();
+        let mut h = Highlights::default();
         h.mark(Selection::edge("wasi:http/handler@0.3.0::middleware->srv"));
         h.mark(Selection::edge("nope::a->b"));
         let present = ["wasi:http/handler@0.3.0::middleware->srv"];
@@ -627,8 +676,42 @@ mod tests {
     }
 
     #[test]
+    fn selection_from_str_node() {
+        let sel: Selection = "node:srv".parse().unwrap();
+        let mut h = Highlights::default();
+        h.mark(sel);
+        assert!(h.is_node_highlighted("srv"));
+    }
+
+    #[test]
+    fn selection_from_str_edge() {
+        let sel: Selection = "edge:wasi:http/handler@0.3.0::a->b".parse().unwrap();
+        let mut h = Highlights::default();
+        h.mark(sel);
+        assert!(h.is_edge_highlighted("wasi:http/handler@0.3.0::a->b"));
+    }
+
+    #[test]
+    fn selection_from_str_rejects_missing_kind() {
+        let err = "srv".parse::<Selection>().unwrap_err();
+        assert_eq!(err, SelectionParseError::MissingKind);
+    }
+
+    #[test]
+    fn selection_from_str_rejects_empty_id() {
+        let err = "node:".parse::<Selection>().unwrap_err();
+        assert_eq!(err, SelectionParseError::EmptyId);
+    }
+
+    #[test]
+    fn selection_from_str_rejects_unknown_kind() {
+        let err = "nope:srv".parse::<Selection>().unwrap_err();
+        assert_eq!(err, SelectionParseError::UnknownKind("nope".to_string()));
+    }
+
+    #[test]
     fn missing_lookup_returns_empty() {
-        let h = Highlights::new();
+        let h = Highlights::default();
         assert!(!h.is_node_highlighted("nope"));
         assert!(h.node_tag_ids("nope").is_empty());
         assert!(!h.is_edge_highlighted("nope"));
