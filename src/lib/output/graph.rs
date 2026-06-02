@@ -1,62 +1,38 @@
 //! Graph-shaped ASCII rendering, per export-reachable subgraph.
 //!
-//! The composition is split into one [`ExportSubgraph`](crate::ExportSubgraph)
-//! per top-level export.  Each subgraph is rendered as its own block with a
-//! section header naming the export; instances that appear in more than one
-//! subgraph get a double-line border in the second-and-subsequent occurrence
-//! so the reader can see "this is the same instance, just reached two
-//! different ways."  Sharing is decided by instance index (`u32`), not
-//! display name.
+//! One block per top-level export.  Instances that appear in two or more
+//! subgraphs get a double-line border on second-and-later occurrences so
+//! the reader can spot shared infrastructure.
 
 use crate::canonical_id::canonical_edge_id;
 use crate::highlights::{format_tag_label, HighlightColor, Highlights};
 use crate::model::CompositionGraph;
 use crate::output::SymbolMap;
-use crate::subgraph::{compute_export_subgraphs, shared_instances, ExportSubgraph, SubgraphEdge};
+use crate::subgraph::{
+    canonical_ids, compute_export_subgraphs, filtered_tag_lines, shared_instances, ExportSubgraph,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Result of [`generate_graph_ascii`].
-///
-/// `ascii` is the rendered diagram.  `condensed` is `true` when the renderer
-/// had to compromise legibility to fit the requested width — either a node
-/// name was truncated or the rendered diagram would have exceeded the caller's
-/// `max_width`.  Callers (the CLI) can use the flag to surface a hint, e.g.
-/// "this diagram may render better with `-f mermaid`."
 #[derive(Debug, Clone, Default)]
 pub struct GraphAsciiOutput {
     pub ascii: String,
     pub condensed: bool,
-    /// Canonical IDs from the caller's [`Highlights`] that did not match any
-    /// node or edge in the composition.  Empty when no `Highlights` were
-    /// supplied or every id matched.  Callers (the CLI) can surface this as
-    /// a "did you mean…" hint.
     pub unmatched_highlight_ids: Vec<String>,
 }
 
-/// Maximum width for a node label.  Adapter names from WAC compositions can
-/// exceed 60 characters; everything wider than this is middle-truncated with
-/// an ellipsis.
+/// Width cap for a node label.  Names wider than this are middle-truncated
+/// with an ellipsis.
 pub const MAX_NODE_LABEL: usize = 28;
 
-/// Generate a graph-shaped ASCII diagram from the composition graph.
+/// Render the composition as a graph-shaped ASCII diagram.
 ///
-/// One section is rendered per top-level export, in interface-name order.
-/// Instances shared between multiple sections render with a double-line
-/// border in the second-and-subsequent occurrence so the reader can see
-/// "this is the same instance, just reached two different ways."
+/// `highlights` (when `Some`) draws a heavy border + colored arrow on
+/// matched nodes/edges, surfaces `[1,3]`-style tag brackets, and appends
+/// a Tags list under the Signatures section.  `use_color` toggles ANSI
+/// emission — turn it off for files and pipes.
 ///
-/// `highlights`, when `Some`, brings in caller-supplied emphasis: highlighted
-/// nodes get a heavy box border, highlighted edges get a colored arrow when
-/// `use_color` is on, and any attached contexts surface as `[1,3]`-style
-/// labels with a Tags list appended after the Signatures section.
-///
-/// `use_color` controls ANSI emission.  Set it to `false` when redirecting
-/// to a file or pipe; the heavy box-drawing and numeric labels still convey
-/// the highlight signal without escape codes.
-///
-/// If the composition exports nothing, all real nodes connected by
-/// inter-component edges are rendered as a single unnamed block (mostly
-/// useful for test fixtures).
+/// With no exports, all real nodes connected by inter-component edges
+/// are rendered as a single unnamed fallback block.
 pub fn generate_graph_ascii(
     graph: &CompositionGraph,
     show_types: bool,
@@ -71,34 +47,17 @@ pub fn generate_graph_ascii(
         }
     }
     if subgraphs.is_empty() {
-        let (node_ids, edge_ids) = present_canonical_ids(graph, &[]);
-        let unmatched = highlights
-            .map(|h| {
-                let mut v: Vec<String> = Vec::new();
-                for id in h.unmatched_node_ids(node_ids.iter().map(String::as_str)) {
-                    v.push(id.to_string());
-                }
-                for id in h.unmatched_edge_ids(edge_ids.iter().map(String::as_str)) {
-                    v.push(id.to_string());
-                }
-                v
-            })
-            .unwrap_or_default();
+        let (nodes, edges) = canonical_ids(graph, &[]);
         return GraphAsciiOutput {
             ascii: "No component instances found".to_string(),
             condensed: false,
-            unmatched_highlight_ids: unmatched,
+            unmatched_highlight_ids: collect_unmatched(highlights, &nodes, &edges),
         };
     }
 
-    // Pre-compute the set of instances appearing in two or more subgraphs;
-    // those become candidates for the "shared" double-line treatment.  The
-    // root of each subgraph never gets the treatment (it's that block's
-    // visual anchor), so the rendering loop excludes the current root.
     let shared = shared_instances(&subgraphs);
-
-    // Shared SymbolMap so type signatures are collected from every subgraph
-    // and listed once at the bottom.
+    // Shared SymbolMap so identical types reuse a symbol across blocks
+    // and the Signatures key prints once at the bottom.
     let mut symbols = SymbolMap::new();
     let mut already_rendered: BTreeSet<u32> = BTreeSet::new();
     let mut sections: Vec<String> = Vec::new();
@@ -106,8 +65,10 @@ pub fn generate_graph_ascii(
     let mut any_exceeded = false;
 
     for sg in &subgraphs {
-        // Only mark a node as "shared" (double-line) if it has appeared in
-        // an earlier subgraph AND is not this subgraph's root.
+        // A node gets the "shared" double-line border on this occurrence
+        // only if it appeared in an earlier subgraph and isn't this
+        // subgraph's root (the root keeps the single border as the
+        // block's anchor).
         let mut shared_here: BTreeSet<u32> = sg
             .nodes
             .iter()
@@ -133,120 +94,70 @@ pub fn generate_graph_ascii(
         any_truncated |= truncated;
         any_exceeded |= exceeded;
 
-        let header = section_header(&sg.interface_name);
-        if let Some(h) = header {
-            sections.push(format!("{h}\n\n{ascii}"));
-        } else {
-            sections.push(ascii);
-        }
-
+        sections.push(match section_header(&sg.interface_name) {
+            Some(h) => format!("{h}\n\n{ascii}"),
+            None => ascii,
+        });
         already_rendered.extend(sg.nodes.iter().copied());
     }
 
     let mut out = sections.join("\n\n\n");
-    if !symbols.is_empty() {
-        out.push_str("\n\n");
-        out.push_str("Signatures:\n");
-        for line in symbols.key_lines() {
-            out.push_str("  ");
-            out.push_str(&line);
-            out.push('\n');
-        }
-        if out.ends_with('\n') {
-            out.pop();
-        }
-    }
+    append_section(&mut out, "Signatures:", symbols.key_lines());
 
-    // Compute the present (canonical id) sets once and reuse them for
-    // both the unmatched-id surface and the filtered Tags list.  Tags
-    // whose only attachments are unmatched IDs are omitted — they would
-    // otherwise read as "real" entries in the rendered output while the
-    // matching highlight failed silently.  See the warning surface for
-    // the corresponding diagnostic.
-    let (present_node_ids, present_edge_ids) = present_canonical_ids(graph, &subgraphs);
-    if let Some(h) = highlights {
-        let filtered = h.tag_lines_referenced_by(
-            present_node_ids.iter().map(String::as_str),
-            present_edge_ids.iter().map(String::as_str),
-        );
-        if !filtered.is_empty() {
-            out.push_str("\n\n");
-            out.push_str("Tags:\n");
-            for line in filtered {
-                out.push_str("  ");
-                out.push_str(&line);
-                out.push('\n');
-            }
-            if out.ends_with('\n') {
-                out.pop();
-            }
-        }
-    }
-
-    let unmatched_highlight_ids = highlights
-        .map(|h| {
-            let mut v: Vec<String> = Vec::new();
-            for id in h.unmatched_node_ids(present_node_ids.iter().map(String::as_str)) {
-                v.push(id.to_string());
-            }
-            for id in h.unmatched_edge_ids(present_edge_ids.iter().map(String::as_str)) {
-                v.push(id.to_string());
-            }
-            v
-        })
-        .unwrap_or_default();
+    let (present_nodes, present_edges) = canonical_ids(graph, &subgraphs);
+    // Filter the Tags list to contexts referenced by matched ids — a
+    // typo'd highlight whose tag never attaches to anything would
+    // otherwise read as "real" while the matching highlight failed
+    // silently.
+    append_section(
+        &mut out,
+        "Tags:",
+        filtered_tag_lines(highlights, &present_nodes, &present_edges),
+    );
 
     GraphAsciiOutput {
         ascii: out,
         condensed: any_truncated || any_exceeded,
-        unmatched_highlight_ids,
+        unmatched_highlight_ids: collect_unmatched(highlights, &present_nodes, &present_edges),
     }
 }
 
-/// Collect every canonical node ID and edge ID present in `graph` /
-/// `subgraphs`.  These are the IDs a caller's [`Highlights`] map needs to
-/// match against to bind to something the renderer can emphasize.
-///
-/// - Node IDs: every real node's `canonical_id`.
-/// - Edge IDs: internal edges from every subgraph + every export's
-///   boundary edge (caller = None).
-fn present_canonical_ids(
-    graph: &CompositionGraph,
-    subgraphs: &[ExportSubgraph],
-) -> (Vec<String>, Vec<String>) {
-    let node_ids: Vec<String> = graph
-        .nodes
-        .values()
-        .map(|n| n.canonical_id().to_string())
-        .collect();
-
-    let mut edge_id_set: BTreeSet<String> = BTreeSet::new();
-    for sg in subgraphs {
-        for e in &sg.edges {
-            let caller_label = graph
-                .nodes
-                .get(&e.caller)
-                .map(|n| n.canonical_id().to_string());
-            let provider_label = graph
-                .nodes
-                .get(&e.provider)
-                .map(|n| n.canonical_id().to_string());
-            if let (Some(caller), Some(provider)) = (caller_label, provider_label) {
-                edge_id_set.insert(canonical_edge_id(&e.interface, Some(&caller), &provider));
-            }
-        }
-        if !sg.interface_name.is_empty() {
-            if let Some(src) = graph.nodes.get(&sg.source_instance) {
-                edge_id_set.insert(canonical_edge_id(
-                    &sg.interface_name,
-                    None,
-                    src.canonical_id(),
-                ));
-            }
-        }
+/// Append a `"Header:\n  line1\n  line2"` block separated from `out` by
+/// a blank line.  No-op when `lines` is empty.
+fn append_section(out: &mut String, header: &str, lines: Vec<String>) {
+    if lines.is_empty() {
+        return;
     }
-    let edge_ids: Vec<String> = edge_id_set.into_iter().collect();
-    (node_ids, edge_ids)
+    out.push_str("\n\n");
+    out.push_str(header);
+    for line in lines {
+        out.push('\n');
+        out.push_str("  ");
+        out.push_str(&line);
+    }
+}
+
+/// Combine `unmatched_node_ids` + `unmatched_edge_ids` into one owned
+/// `Vec<String>` (or empty when there are no highlights).
+fn collect_unmatched(
+    highlights: Option<&Highlights>,
+    node_ids: &BTreeSet<String>,
+    edge_ids: &BTreeSet<String>,
+) -> Vec<String> {
+    let Some(h) = highlights else {
+        return Vec::new();
+    };
+    let mut v: Vec<String> = h
+        .unmatched_node_ids(node_ids.iter().map(String::as_str))
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    v.extend(
+        h.unmatched_edge_ids(edge_ids.iter().map(String::as_str))
+            .into_iter()
+            .map(str::to_string),
+    );
+    v
 }
 
 /// Middle-truncate a label to fit within `max` display columns.
@@ -275,8 +186,8 @@ fn section_header(interface_name: &str) -> Option<String> {
     Some(format!("╞══ {short} {}", "═".repeat(40)))
 }
 
-/// When the composition has no exports, treat all real nodes connected by
-/// any inter-component edge as one anonymous block.
+/// When the composition has no exports, treat all real nodes connected
+/// by any inter-component edge as one anonymous block.
 fn fallback_subgraph(graph: &CompositionGraph) -> Option<ExportSubgraph> {
     use crate::model::SYNTHETIC_COMPONENT;
     let mut nodes: BTreeSet<u32> = BTreeSet::new();
@@ -304,28 +215,7 @@ fn fallback_subgraph(graph: &CompositionGraph) -> Option<ExportSubgraph> {
     if nodes.is_empty() {
         return None;
     }
-    let mut edges = Vec::new();
-    for &caller_idx in &nodes {
-        let Some(caller) = graph.nodes.get(&caller_idx) else {
-            continue;
-        };
-        for import in &caller.imports {
-            if import.is_host_import {
-                continue;
-            }
-            let Some(provider_idx) = import.source_instance else {
-                continue;
-            };
-            if !nodes.contains(&provider_idx) {
-                continue;
-            }
-            edges.push(SubgraphEdge {
-                caller: caller_idx,
-                provider: provider_idx,
-                interface: import.interface_name.clone(),
-            });
-        }
-    }
+    let edges = crate::subgraph::collect_edges(graph, &nodes);
     let source_instance = *nodes.iter().next().unwrap();
     Some(ExportSubgraph {
         interface_name: String::new(),
@@ -370,18 +260,17 @@ fn render_subgraph(
 // Layout model — keyed by instance index (u32)
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 struct Layout {
-    /// Outer index = rank (column, left → right).  Inner = node instance
-    /// indices in that rank (top → bottom).
+    /// `ranks[rank][i]` = instance index at column `rank`, row `i`.
     ranks: Vec<Vec<u32>>,
-    /// All inter-component edges in (caller, provider) form (already in
-    /// request-flow direction).  Parallel interfaces between the same pair
-    /// are merged into a single edge whose `interfaces` vec carries them.
+    /// Inter-component edges in request-flow direction.  Parallel
+    /// interfaces between the same (caller, provider) pair are merged
+    /// into one [`Edge`] whose `interfaces` carries them.
     edges: Vec<Edge>,
-    /// One [`Export`] for this subgraph's externally-callable interface.
-    /// May be empty (anonymous fallback block).
+    /// External-callable interfaces (empty for the anonymous fallback
+    /// block).
     exports: Vec<Export>,
-    /// Per-instance rendering info (display label, possibly truncated).
     nodes: BTreeMap<u32, NodeInfo>,
     /// True iff any node label was shortened to fit [`MAX_NODE_LABEL`].
     any_truncated: bool,
@@ -389,25 +278,20 @@ struct Layout {
 
 #[derive(Clone)]
 struct NodeInfo {
-    /// The label to draw inside the box (after truncation, with any
-    /// `[1,3]` context suffix already baked in so layout sizing widens the
-    /// box accordingly).
+    /// Display label after truncation, with any `[1,3]` tag suffix
+    /// already baked in so layout sizing widens the box accordingly.
     label: String,
-    /// Highlight color, or `None` when this node was not in
-    /// [`Highlights`].  When `Some`, the box renders with the heavy single-
-    /// line border and (under ANSI) lights up in this color.
     highlight: Option<HighlightColor>,
 }
 
+#[derive(Clone)]
 struct Edge {
     from: u32,
     to: u32,
     interfaces: Vec<Interface>,
     rendered_label: String,
-    /// Aggregated highlight: the first non-default color among the merged
-    /// interfaces' highlights, or the default color when any interface is
-    /// highlighted with the default, or `None` when nothing's highlighted.
-    /// Used for the edge's overall color in ANSI mode.
+    /// Aggregated highlight: first non-None color among the merged
+    /// interfaces' highlights, used for the edge's overall ANSI color.
     highlight: Option<HighlightColor>,
 }
 
@@ -416,13 +300,11 @@ struct Interface {
     label: String,
     fingerprint: Option<String>,
     type_lines: Vec<String>,
-    /// Highlight color for this specific interface, if its canonical edge
-    /// ID matched a highlight key.
     highlight: Option<HighlightColor>,
-    /// Consumer-assigned tag IDs attached to this interface.
     tag_ids: Vec<u32>,
 }
 
+#[derive(Clone)]
 struct Export {
     provider: u32,
     label: String,
@@ -682,13 +564,11 @@ const GUTTER_MIN: usize = 8;
 /// tell where one subtree ends and the next begins.
 const INTER_SUBTREE_GAP: usize = 2;
 
-/// Tree-aware DFS placement of one subtree.  `cursor` is the y at which this
-/// subtree starts (top of the first child's first row).  Returns the y just
-/// past this subtree's bottom so callers can place the next sibling there.
-///
-/// The placed node's y is set to centre on its children's mid rows; leaves
-/// land at `cursor`.  For DAGs, the first encounter wins — secondary parents
-/// of a shared node draw their edge into the already-placed position.
+/// DFS-place one subtree.  `cursor` is the y at which this subtree
+/// starts; returns the y just past its bottom.  Leaves land at `cursor`;
+/// parents align with their first child's row.  For DAGs, the first
+/// encounter wins — secondary parents draw their edge into the
+/// already-placed position.
 fn place_subtree(
     node: u32,
     cursor: usize,
@@ -729,13 +609,6 @@ fn place_subtree(
         current = after;
     }
 
-    // Parent aligns with the FIRST child's row so the first outgoing edge
-    // reads as a straight line and subsequent ones as bent-down branches.
-    // This produces the canonical trunk-and-branch shape — `┬` at the
-    // parent's row, `├` on each intermediate branch, `└` on the bottom
-    // branch — without any extra drawing logic; the direction merger
-    // composes those glyphs automatically when straight + bent edges
-    // overlap in the same gutter cell.
     let my_mid = child_mids.first().copied().unwrap_or(cursor + 1);
     let my_top = my_mid.saturating_sub(1);
     node_top.insert(node, my_top);
@@ -942,50 +815,34 @@ fn render(
     wrap_max_width: Option<usize>,
     use_color: bool,
 ) -> RenderedSubgraph {
-    // Assign labels (with type symbols when present) up front so the gutter
-    // sizing computed by `geom` accommodates the final label width.  The
-    // SymbolMap is shared across subgraphs by the caller, so identical
-    // fingerprints get identical symbols even across blocks.
-    //
-    // `assign(show_types=true, ...)` returns the empty string when there's
-    // no fingerprint (which is what `layout_subgraph` produces when types
-    // are disabled), so this loop is correct in both modes.
-    let mut sized = layout.clone_shallow();
+    // Assign labels up front so `geom` sizes the gutter against the final
+    // label width.  `SymbolMap` is shared across subgraphs by the caller
+    // so identical fingerprints reuse the same symbol everywhere.
+    let mut sized = layout.clone();
     for exp in sized.exports.iter_mut() {
-        let sym = symbols.assign(true, exp.fingerprint.as_deref(), exp.type_lines.clone());
-        let ctx_suffix = format_tag_label(&exp.tag_ids);
-        let base = if sym.is_empty() {
-            exp.label.clone()
-        } else {
-            format!("{}{}", exp.label, sym)
-        };
-        exp.rendered_label = if ctx_suffix.is_empty() {
-            base
-        } else {
-            format!("{}{}", base, ctx_suffix)
-        };
+        exp.rendered_label = compose_label(
+            &exp.label,
+            exp.fingerprint.as_deref(),
+            &exp.type_lines,
+            &exp.tag_ids,
+            symbols,
+        );
     }
     for edge in sized.edges.iter_mut() {
-        let parts: Vec<String> = edge
+        edge.rendered_label = edge
             .interfaces
             .iter()
             .map(|iface| {
-                let sym =
-                    symbols.assign(true, iface.fingerprint.as_deref(), iface.type_lines.clone());
-                let ctx_suffix = format_tag_label(&iface.tag_ids);
-                let base = if sym.is_empty() {
-                    iface.label.clone()
-                } else {
-                    format!("{}{}", iface.label, sym)
-                };
-                if ctx_suffix.is_empty() {
-                    base
-                } else {
-                    format!("{}{}", base, ctx_suffix)
-                }
+                compose_label(
+                    &iface.label,
+                    iface.fingerprint.as_deref(),
+                    &iface.type_lines,
+                    &iface.tag_ids,
+                    symbols,
+                )
             })
-            .collect();
-        edge.rendered_label = parts.join(",");
+            .collect::<Vec<_>>()
+            .join(",");
     }
 
     let leading_pad = leading_pad_width(&sized);
@@ -1002,16 +859,9 @@ fn render(
             let x0 = g.col_x[r];
             let w = g.col_w[r];
             let info = &sized.nodes[&id];
-            // Highlight wins over shared — see the design doc.  When a
-            // node is both, the heavy single-line border draws and the
-            // double-line "shared" signal is dropped on this occurrence.
+            // Highlight wins over shared: a node that's both gets the
+            // heavy single-line border, not the double-line "shared" one.
             let is_shared = info.highlight.is_none() && shared_here.contains(&id);
-            // Append `[N,M]` context label inside the box only when there
-            // is real label space for it; otherwise the box width has
-            // already been computed without room.  Plumb context_ids
-            // through compute_label and grow `col_w` instead?  Future
-            // work — for now we keep the label as-is and surface contexts
-            // via the Tags list.
             draw_box(
                 &mut grid,
                 &mut colors,
@@ -1036,17 +886,32 @@ fn render(
         draw_export(&mut grid, &mut colors, &sized, &g, exp);
     }
 
-    let needs_wrap = wrap_max_width.is_some_and(|w| g.width > w);
-    let ascii = if needs_wrap {
-        wrap_grid_into_bands(&grid, &colors, &g, wrap_max_width.unwrap(), use_color)
-    } else {
-        grid_to_string(&grid, &colors, use_color)
+    let ascii = match wrap_max_width {
+        Some(w) if g.width > w => wrap_grid_into_bands(&grid, &colors, &g, w, use_color),
+        _ => grid_to_string(&grid, &colors, use_color),
     };
-
     RenderedSubgraph {
         ascii,
         natural_width,
     }
+}
+
+/// `"label" + "<type-symbol>" + "[1,3]"`, where each piece is omitted
+/// when empty.  Used for both edge interfaces and exports.
+fn compose_label(
+    label: &str,
+    fingerprint: Option<&str>,
+    type_lines: &[String],
+    tag_ids: &[u32],
+    symbols: &mut SymbolMap,
+) -> String {
+    let sym = symbols.assign(true, fingerprint, type_lines.to_vec());
+    let ctx = format_tag_label(tag_ids);
+    let mut out = String::with_capacity(label.len() + sym.len() + ctx.len());
+    out.push_str(label);
+    out.push_str(&sym);
+    out.push_str(&ctx);
+    out
 }
 
 const WRAP_INDENT_NORMAL: &str = "    ";
@@ -1141,48 +1006,6 @@ fn compute_band_ranges(g: &Geom, max_width: usize) -> Vec<(usize, usize)> {
     bands
 }
 
-impl Layout {
-    fn clone_shallow(&self) -> Layout {
-        Layout {
-            ranks: self.ranks.clone(),
-            edges: self
-                .edges
-                .iter()
-                .map(|e| Edge {
-                    from: e.from,
-                    to: e.to,
-                    interfaces: e.interfaces.clone(),
-                    rendered_label: e.rendered_label.clone(),
-                    highlight: e.highlight,
-                })
-                .collect(),
-            exports: self
-                .exports
-                .iter()
-                .map(|x| Export {
-                    provider: x.provider,
-                    label: x.label.clone(),
-                    fingerprint: x.fingerprint.clone(),
-                    type_lines: x.type_lines.clone(),
-                    rendered_label: x.rendered_label.clone(),
-                    highlight: x.highlight,
-                    tag_ids: x.tag_ids.clone(),
-                })
-                .collect(),
-            nodes: self.nodes.clone(),
-            any_truncated: self.any_truncated,
-        }
-    }
-}
-
-/// Draw a single-line, double-line, or heavy box.
-///
-/// - `highlight = Some(_)` → heavy border (`┏━┓ ┃ ┃ ┗━┛`) and the box's
-///   cells are painted in the highlight color.  Highlight takes precedence
-///   over `shared`, matching the design decision in the picking-up
-///   doc.
-/// - `shared = true` (no highlight) → double border (`╔═╗ ║ ║ ╚═╝`).
-/// - Otherwise → standard light single border (`┌─┐ │ │ └─┘`).
 #[allow(clippy::too_many_arguments)]
 fn draw_box(
     grid: &mut [Vec<char>],
@@ -1360,20 +1183,12 @@ fn draw_single_edge(
     }
 
     // Vertical bar through the gap.  Strictly between the source-row and
-    // target-row corners — writing UP|DOWN into the corner cell itself would
-    // upgrade `└` to `├` (vertical-and-right), making the last branch look
-    // like the trunk continues past it when it doesn't.  Sibling bent edges
-    // whose targets are deeper will write their own bar through this row and
-    // correctly upgrade the corner via their own merge.
-    if y0 < y1 && y0 + 2 <= y1 {
-        for (i, row) in grid.iter_mut().enumerate().take(y1).skip(y0 + 1) {
-            row[bend_x] = merge_dirs(row[bend_x], DIR_UP | DIR_DOWN);
-            if let Some(c) = highlight {
-                colors[i][bend_x] = Some(c);
-            }
-        }
-    } else if y0 > y1 && y1 + 2 <= y0 {
-        for (i, row) in grid.iter_mut().enumerate().take(y0).skip(y1 + 1) {
+    // target-row corners — writing UP|DOWN into a corner cell itself
+    // would upgrade `└` to `├` (vertical-and-right), making the last
+    // branch look like the trunk continues past it when it doesn't.
+    let (top, bottom) = if y0 < y1 { (y0, y1) } else { (y1, y0) };
+    if top + 2 <= bottom {
+        for (i, row) in grid.iter_mut().enumerate().take(bottom).skip(top + 1) {
             row[bend_x] = merge_dirs(row[bend_x], DIR_UP | DIR_DOWN);
             if let Some(c) = highlight {
                 colors[i][bend_x] = Some(c);
@@ -1526,10 +1341,9 @@ fn draw_export(
     }
 }
 
-/// Convert the (grid, colors) pair into a string.  When `use_color` is true,
-/// contiguous runs of cells sharing a highlight color are wrapped in ANSI
-/// bold-color escapes.  When false, the colors grid is ignored and the
-/// output is plain UTF-8 box-drawing.
+/// Stringify the (grid, colors) pair.  With `use_color`, contiguous runs
+/// sharing a highlight color get wrapped in ANSI escapes; without, the
+/// colors grid is ignored and output is plain UTF-8.
 fn grid_to_string(
     grid: &[Vec<char>],
     colors: &[Vec<Option<HighlightColor>>],
@@ -1545,10 +1359,9 @@ fn grid_to_string(
     out
 }
 
-/// Emit a single row range `[start, end)` into `out`.  Trims trailing
-/// blanks, weaves ANSI escapes around contiguous colored runs when
-/// `use_color` is true, and resets the color span before the trailing
-/// trim so the escape doesn't bleed into following lines.
+/// Emit `row[start..end]` into `out`, trimming trailing blanks and
+/// weaving ANSI escapes around contiguous colored runs.  Resets before
+/// the trim so the escape doesn't bleed into following lines.
 fn emit_row_range(
     out: &mut String,
     row: &[char],

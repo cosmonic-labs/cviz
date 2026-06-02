@@ -161,6 +161,42 @@ impl SymbolMap {
         Some(self.get_or_insert(fp, arena.lookup_interface(id), arena))
     }
 
+    pub(crate) fn export_symbol(
+        &mut self,
+        graph: &CompositionGraph,
+        interface_name: &str,
+        show_types: bool,
+    ) -> String {
+        if !show_types {
+            return String::new();
+        }
+        graph
+            .component_exports
+            .get(interface_name)
+            .and_then(|info| self.symbol_for_export(info, &graph.arena))
+            .map(str::to_string)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn connection_symbol(
+        &mut self,
+        graph: &CompositionGraph,
+        from_node: &crate::model::ComponentNode,
+        interface_name: &str,
+        show_types: bool,
+    ) -> String {
+        if !show_types {
+            return String::new();
+        }
+        from_node
+            .imports
+            .iter()
+            .find(|c| c.interface_name == interface_name)
+            .and_then(|c| self.symbol_for_conn(c, &graph.arena))
+            .map(str::to_string)
+            .unwrap_or_default()
+    }
+
     fn get_or_insert(&mut self, fp: &str, iface: &InterfaceType, arena: &TypeArena) -> &str {
         if let Some(pos) = self.entries.iter().position(|(f, _, _)| f == fp) {
             return &self.entries[pos].1;

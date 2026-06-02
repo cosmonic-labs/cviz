@@ -1,20 +1,14 @@
 //! Per-export reachability subgraphs.
 //!
-//! A composition typically exposes one or more interfaces to the outside
-//! world via top-level exports.  For each export, the *reachable* set of
-//! instances — everything the exporter transitively calls in request-flow
-//! direction — forms a self-contained slice of the larger composition.
-//!
-//! This module computes those slices.  Each [`ExportSubgraph`] names one
-//! export, identifies the instance providing it, and enumerates all
-//! reachable instances and the inter-component edges among them.
+//! For each top-level export, the *reachable* set of instances —
+//! everything the exporter transitively calls in request-flow direction —
+//! forms a self-contained slice of the larger composition.
 //!
 //! Identity is by **instance index** (the `u32` key in
-//! [`CompositionGraph::nodes`]), not by display name.  Two component
-//! instances can share a display label without being the same instance;
-//! callers that need to detect "shared across subgraphs" should compare
-//! `u32`s, not strings.
+//! [`CompositionGraph::nodes`]), not by display name: two component
+//! instances can share a display label without being the same instance.
 
+use crate::highlights::Highlights;
 use crate::model::{CompositionGraph, SYNTHETIC_COMPONENT};
 use std::collections::{BTreeSet, VecDeque};
 
@@ -23,18 +17,15 @@ use std::collections::{BTreeSet, VecDeque};
 pub struct ExportSubgraph {
     /// Fully-qualified exported interface name (e.g. `wasi:http/handler@0.3.0`).
     pub interface_name: String,
-    /// Instance index of the node providing the export (the subgraph root).
+    /// The instance providing the export (subgraph root).
     pub source_instance: u32,
-    /// Every reachable instance, **including** the source.  Synthetic
-    /// component instances are excluded.
+    /// Every reachable instance, including the source. Synthetics excluded.
     pub nodes: BTreeSet<u32>,
-    /// Inter-component edges among the reachable nodes, in
-    /// `(caller, provider, interface)` order — i.e. request-flow direction.
-    /// Host imports are excluded.
+    /// Inter-component edges among the reachable nodes in request-flow
+    /// direction. Host imports excluded.
     pub edges: Vec<SubgraphEdge>,
 }
 
-/// A single (caller → provider) edge inside an [`ExportSubgraph`].
 #[derive(Debug, Clone)]
 pub struct SubgraphEdge {
     pub caller: u32,
@@ -42,20 +33,13 @@ pub struct SubgraphEdge {
     pub interface: String,
 }
 
-/// Compute one [`ExportSubgraph`] per top-level export.
-///
-/// Subgraphs are returned in the iteration order of
-/// [`CompositionGraph::component_exports`] (sorted by interface name, since
-/// the map is a `BTreeMap`).  An instance may appear in more than one
-/// subgraph; consumers that care about sharing should diff the `nodes`
-/// sets against one another.
+/// Compute one [`ExportSubgraph`] per top-level export, in interface-name
+/// order (the `BTreeMap` iteration order of `component_exports`).
 pub fn compute_export_subgraphs(graph: &CompositionGraph) -> Vec<ExportSubgraph> {
     graph
         .component_exports
         .iter()
         .filter_map(|(name, info)| {
-            // Skip exports whose source isn't a real node (defensive — the
-            // parser should not produce these, but better safe).
             let src_node = graph.nodes.get(&info.source_instance)?;
             if src_node.component_index == SYNTHETIC_COMPONENT {
                 return None;
@@ -72,11 +56,9 @@ pub fn compute_export_subgraphs(graph: &CompositionGraph) -> Vec<ExportSubgraph>
         .collect()
 }
 
-/// Instance indices that appear in two or more of the given subgraphs.
-///
-/// Used by the renderer to decide which boxes deserve the "shared instance"
-/// visual treatment (double-line border in the second-and-subsequent
-/// occurrences).
+/// Instance indices that appear in two or more of the given subgraphs —
+/// what the renderer uses to flag a shared instance with the double-line
+/// border treatment.
 pub fn shared_instances(subgraphs: &[ExportSubgraph]) -> BTreeSet<u32> {
     let mut seen = BTreeSet::new();
     let mut shared = BTreeSet::new();
@@ -90,6 +72,9 @@ pub fn shared_instances(subgraphs: &[ExportSubgraph]) -> BTreeSet<u32> {
     shared
 }
 
+/// BFS through inter-component imports starting at `start`. Synthetic
+/// nodes are not traversed through and are stripped from the result; if
+/// `start` itself is synthetic the result is empty.
 fn reachable_from(graph: &CompositionGraph, start: u32) -> BTreeSet<u32> {
     let mut visited: BTreeSet<u32> = BTreeSet::new();
     let mut queue: VecDeque<u32> = VecDeque::from([start]);
@@ -101,22 +86,19 @@ fn reachable_from(graph: &CompositionGraph, start: u32) -> BTreeSet<u32> {
             continue;
         };
         if node.component_index == SYNTHETIC_COMPONENT {
-            // Recorded for completeness in `visited`; we'll filter at the end.
             continue;
         }
         for import in &node.imports {
             if import.is_host_import {
                 continue;
             }
-            let Some(src) = import.source_instance else {
-                continue;
-            };
-            if graph.nodes.contains_key(&src) {
-                queue.push_back(src);
+            if let Some(src) = import.source_instance {
+                if graph.nodes.contains_key(&src) {
+                    queue.push_back(src);
+                }
             }
         }
     }
-    // Strip any synthetic nodes that snuck in (the start might be synthetic).
     visited
         .into_iter()
         .filter(|idx| {
@@ -128,7 +110,63 @@ fn reachable_from(graph: &CompositionGraph, start: u32) -> BTreeSet<u32> {
         .collect()
 }
 
-fn collect_edges(graph: &CompositionGraph, nodes: &BTreeSet<u32>) -> Vec<SubgraphEdge> {
+/// Collect every canonical node ID and edge ID present in `graph` /
+/// `subgraphs`.
+pub(crate) fn canonical_ids(
+    graph: &CompositionGraph,
+    subgraphs: &[ExportSubgraph],
+) -> (BTreeSet<String>, BTreeSet<String>) {
+    use crate::canonical_id::canonical_edge_id;
+    let nodes: BTreeSet<String> = graph
+        .nodes
+        .values()
+        .map(|n| n.canonical_id().to_string())
+        .collect();
+    let mut edges: BTreeSet<String> = BTreeSet::new();
+    for sg in subgraphs {
+        for e in &sg.edges {
+            let caller = graph.nodes.get(&e.caller).map(|n| n.canonical_id());
+            let provider = graph.nodes.get(&e.provider).map(|n| n.canonical_id());
+            if let (Some(c), Some(p)) = (caller, provider) {
+                edges.insert(canonical_edge_id(&e.interface, Some(c), p));
+            }
+        }
+        // Skip the anonymous fallback subgraph's empty interface name —
+        // there's no boundary edge to register for it.
+        if !sg.interface_name.is_empty() {
+            if let Some(src) = graph.nodes.get(&sg.source_instance) {
+                edges.insert(canonical_edge_id(
+                    &sg.interface_name,
+                    None,
+                    src.canonical_id(),
+                ));
+            }
+        }
+    }
+    (nodes, edges)
+}
+
+/// `Highlights::tag_lines_referenced_by` lifted to take the present-id
+/// sets [`canonical_ids`] returns and an `Option<&Highlights>`. Empty
+/// when there are no highlights.
+pub(crate) fn filtered_tag_lines(
+    highlights: Option<&Highlights>,
+    present_nodes: &BTreeSet<String>,
+    present_edges: &BTreeSet<String>,
+) -> Vec<String> {
+    highlights
+        .map(|h| {
+            h.tag_lines_referenced_by(
+                present_nodes.iter().map(String::as_str),
+                present_edges.iter().map(String::as_str),
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// Collect every inter-component edge whose caller AND provider are both
+/// in `nodes`. Host imports and dangling source-instance refs are skipped.
+pub(crate) fn collect_edges(graph: &CompositionGraph, nodes: &BTreeSet<u32>) -> Vec<SubgraphEdge> {
     let mut edges = Vec::new();
     for &caller_idx in nodes {
         let Some(caller) = graph.nodes.get(&caller_idx) else {

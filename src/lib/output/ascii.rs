@@ -37,52 +37,26 @@ fn generate_handler_chain_ascii(graph: &CompositionGraph, show_types: bool) -> S
         }
 
         let short = short_interface_name(iface);
+        let export_sym = symbols.export_symbol(graph, iface, show_types);
 
-        let export_sym: String = show_types
-            .then(|| {
-                graph
-                    .component_exports
-                    .get(iface.as_str())
-                    .and_then(|info| symbols.symbol_for_export(info, &graph.arena))
-                    .map(str::to_string)
-            })
-            .flatten()
-            .unwrap_or_default();
-
-        // Export entry point
         if let Some(&first_idx) = chain.first() {
             if let Some(first_node) = graph.get_node(first_idx) {
                 lines.push(format!(
-                    "[Export: {}{}] ──> {}",
-                    short,
-                    export_sym,
+                    "[Export: {short}{export_sym}] ──> {}",
                     first_node.display_label()
                 ));
             }
         }
 
-        // Chain connections
         for window in chain.windows(2) {
             if let [from_idx, to_idx] = window {
                 if let (Some(from_node), Some(to_node)) =
                     (graph.get_node(*from_idx), graph.get_node(*to_idx))
                 {
-                    let conn_sym: String = show_types
-                        .then(|| {
-                            from_node
-                                .imports
-                                .iter()
-                                .find(|c| &c.interface_name == iface)
-                                .and_then(|c| symbols.symbol_for_conn(c, &graph.arena))
-                                .map(str::to_string)
-                        })
-                        .flatten()
-                        .unwrap_or_default();
+                    let conn_sym = symbols.connection_symbol(graph, from_node, iface, show_types);
                     lines.push(format!(
-                        "{} ── {}{} ──> {}",
+                        "{} ── {short}{conn_sym} ──> {}",
                         from_node.display_label(),
-                        short,
-                        conn_sym,
                         to_node.display_label()
                     ));
                 }
@@ -289,12 +263,7 @@ fn box_content(title: &str, lines: &[impl AsRef<str>]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{
-        ComponentNode, FuncSignature, InstanceInterface, InterfaceConnection, InterfaceType,
-        ValueType,
-    };
     use crate::test_utils::*;
-    use std::collections::BTreeMap;
 
     /// Return the 0-based line index of the first line containing `needle`.
     /// Panics with a clear message if not found.
@@ -303,89 +272,6 @@ mod tests {
             .lines()
             .position(|l| l.contains(needle))
             .unwrap_or_else(|| panic!("'{}' not found in output:\n{}", needle, output))
-    }
-
-    /// Build a graph: host → $srv → $middleware → export(handler)
-    fn test_graph() -> CompositionGraph {
-        let mut graph = CompositionGraph::new();
-
-        let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
-        srv.add_import(InterfaceConnection {
-            interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: None,
-            is_host_import: true,
-            interface_type: None,
-            fingerprint: None,
-        });
-        graph.add_node(1, srv);
-
-        let mut mw = ComponentNode::new("$middleware".to_string(), 1, 1);
-        mw.add_import(InterfaceConnection {
-            interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: Some(1),
-            is_host_import: false,
-            interface_type: None,
-            fingerprint: None,
-        });
-        mw.add_import(InterfaceConnection {
-            interface_name: "wasi:logging/log@0.1.0".to_string(),
-            source_instance: None,
-            is_host_import: true,
-            interface_type: None,
-            fingerprint: None,
-        });
-        graph.add_node(2, mw);
-
-        graph.add_export("wasi:http/handler@0.3.0".to_string(), 2, None);
-        graph
-    }
-
-    /// Build a graph with real type information for type-display tests.
-    ///
-    /// Adds an instance interface with a single `handle(u32) -> bool` function
-    /// to both the import and export connections.
-    fn test_graph_with_types() -> CompositionGraph {
-        let mut graph = CompositionGraph::new();
-
-        // Intern the param/result types up front
-        let u32_id = graph.arena.intern_val(ValueType::U32);
-        let bool_id = graph.arena.intern_val(ValueType::Bool);
-
-        let handle_sig = FuncSignature {
-            is_async: false,
-            param_names: vec![],
-            params: vec![u32_id],
-            results: vec![bool_id],
-        };
-        let mut functions = BTreeMap::new();
-        functions.insert("handle".to_string(), handle_sig);
-        let iface_type = InterfaceType::Instance(InstanceInterface {
-            functions,
-            type_exports: BTreeMap::new(),
-        });
-
-        let mut srv = ComponentNode::new("$srv".to_string(), 0, 0);
-        srv.add_import(InterfaceConnection {
-            interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: None,
-            is_host_import: true,
-            interface_type: Some(iface_type.clone()),
-            fingerprint: Some(iface_type.fingerprint(&graph.arena)),
-        });
-        graph.add_node(1, srv);
-
-        let mut mw = ComponentNode::new("$middleware".to_string(), 1, 1);
-        mw.add_import(InterfaceConnection {
-            interface_name: "wasi:http/handler@0.3.0".to_string(),
-            source_instance: Some(1),
-            is_host_import: false,
-            interface_type: Some(iface_type.clone()),
-            fingerprint: Some(iface_type.fingerprint(&graph.arena)),
-        });
-        graph.add_node(2, mw);
-
-        graph.add_export("wasi:http/handler@0.3.0".to_string(), 2, Some(iface_type));
-        graph
     }
 
     #[test]
@@ -400,7 +286,7 @@ mod tests {
 
     #[test]
     fn test_handler_chain_ascii() {
-        let graph = test_graph();
+        let graph = simple_chain_graph();
         let output = generate_ascii(&graph, DetailLevel::HandlerChain, false);
 
         assert!(output.contains("Service Chains"), "should have title");
@@ -421,7 +307,7 @@ mod tests {
 
     #[test]
     fn test_all_interfaces_ascii() {
-        let graph = test_graph();
+        let graph = simple_chain_graph();
         let output = generate_ascii(&graph, DetailLevel::AllInterfaces, false);
 
         assert!(
@@ -445,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_full_ascii() {
-        let graph = test_graph();
+        let graph = simple_chain_graph();
         let output = generate_ascii(&graph, DetailLevel::Full, false);
 
         assert!(
@@ -477,7 +363,7 @@ mod tests {
 
     #[test]
     fn test_show_types_all_interfaces() {
-        let graph = test_graph_with_types();
+        let graph = typed_chain_graph();
         let output = generate_ascii(&graph, DetailLevel::AllInterfaces, true);
 
         // Each connection should be followed by the function signature
@@ -489,7 +375,7 @@ mod tests {
 
     #[test]
     fn test_show_types_full() {
-        let graph = test_graph_with_types();
+        let graph = typed_chain_graph();
         let output = generate_ascii(&graph, DetailLevel::Full, true);
 
         assert!(
@@ -500,7 +386,7 @@ mod tests {
 
     #[test]
     fn test_hide_types_all_interfaces() {
-        let graph = test_graph_with_types();
+        let graph = typed_chain_graph();
         let output = generate_ascii(&graph, DetailLevel::AllInterfaces, false);
 
         // Type lines should not appear when show_types=false
