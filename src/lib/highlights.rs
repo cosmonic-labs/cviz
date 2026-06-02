@@ -57,11 +57,11 @@ impl std::str::FromStr for HighlightColor {
 
 impl HighlightColor {
     /// ANSI SGR reset.  Closes any of the [`Self::ansi_open`] sequences.
-    pub const ANSI_RESET: &'static str = "\x1b[0m";
+    pub(crate) const ANSI_RESET: &'static str = "\x1b[0m";
 
     /// ANSI SGR sequence that opens bold + this color.  Pair with
     /// [`Self::ANSI_RESET`].
-    pub fn ansi_open(self) -> &'static str {
+    pub(crate) fn ansi_open(self) -> &'static str {
         match self {
             HighlightColor::Yellow => "\x1b[1;33m",
             HighlightColor::Cyan => "\x1b[1;36m",
@@ -74,7 +74,10 @@ impl HighlightColor {
         }
     }
 
-    pub fn mermaid_hex(self) -> &'static str {
+    /// Mermaid `fill:`/`stroke:` hex value for this color.  `pub(crate)`
+    /// for the same reason as the ANSI helpers — the specific hex
+    /// values are an implementation choice the Mermaid renderer owns.
+    pub(crate) fn mermaid_hex(self) -> &'static str {
         match self {
             HighlightColor::Yellow => "#d4a017",
             HighlightColor::Cyan => "#1ca3a3",
@@ -453,7 +456,7 @@ impl Highlights {
 /// Render a list of tag IDs as the inline label that goes next to a
 /// highlighted node or edge.  `[1,3,5]`.  Returns an empty string when
 /// `ids` is empty so callers can `concat` unconditionally.
-pub fn format_tag_label(ids: &[u32]) -> String {
+pub(crate) fn format_tag_label(ids: &[u32]) -> String {
     if ids.is_empty() {
         return String::new();
     }

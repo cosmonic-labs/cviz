@@ -10,8 +10,7 @@ pub mod subgraph;
 
 pub use canonical_id::{canonical_edge_id, node_by_canonical_id};
 pub use highlights::{
-    format_tag_label, HighlightColor, Highlights, Selection, SelectionParseError, TagConflict,
-    UnknownColor,
+    HighlightColor, Highlights, Selection, SelectionParseError, TagConflict, UnknownColor,
 };
 pub use subgraph::{compute_export_subgraphs, shared_instances, ExportSubgraph, SubgraphEdge};
 #[cfg(test)]
