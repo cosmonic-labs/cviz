@@ -1,5 +1,5 @@
 use crate::canonical_id::canonical_edge_id;
-use crate::highlights::{format_context_label, HighlightColor, Highlights};
+use crate::highlights::{format_tag_label, HighlightColor, Highlights};
 use crate::model::{short_interface_name, CompositionGraph};
 use crate::output::{
     build_all_interfaces_view, build_full_view, DetailLevel, Direction, SymbolMap,
@@ -98,7 +98,7 @@ fn generate_graph(
             }
             let node_id = node_id_for(idx);
             let node_ctx_suffix = highlights
-                .map(|h| format_context_label(&h.node_context_ids(node.canonical_id())))
+                .map(|h| format_tag_label(&h.node_tag_ids(node.canonical_id())))
                 .unwrap_or_default();
             output.push_str(&format!(
                 "        {}[\"{}{}\"]\n",
@@ -127,15 +127,15 @@ fn generate_graph(
         } else {
             String::new()
         };
-        let (export_hl, export_ctx_ids) = highlights
+        let (export_hl, export_tag_ids) = highlights
             .and_then(|h| {
                 graph.nodes.get(&sg.source_instance).map(|src| {
                     let id = canonical_edge_id(&sg.interface_name, None, src.canonical_id());
-                    (h.edge_color(&id), h.edge_context_ids(&id))
+                    (h.edge_color(&id), h.edge_tag_ids(&id))
                 })
             })
             .unwrap_or((None, Vec::new()));
-        let export_ctx_suffix = format_context_label(&export_ctx_ids);
+        let export_ctx_suffix = format_tag_label(&export_tag_ids);
         output.push_str(&format!(
             "        {}([\"ext: {}{}{}\"]) --> {}\n",
             export_node,
@@ -181,17 +181,17 @@ fn generate_graph(
             // Per-interface highlight + context, computed against the
             // canonical edge ID assembled from caller/provider canonical
             // labels.
-            let (iface_hl, iface_ctx_ids) = highlights
+            let (iface_hl, iface_tag_ids) = highlights
                 .and_then(|h| {
                     let caller = graph.nodes.get(&e.caller).map(|n| n.canonical_id());
                     let provider = graph.nodes.get(&e.provider).map(|n| n.canonical_id());
                     caller.zip(provider).map(|(c, p)| {
                         let id = canonical_edge_id(&e.interface, Some(c), p);
-                        (h.edge_color(&id), h.edge_context_ids(&id))
+                        (h.edge_color(&id), h.edge_tag_ids(&id))
                     })
                 })
                 .unwrap_or((None, Vec::new()));
-            let ctx_suffix = format_context_label(&iface_ctx_ids);
+            let ctx_suffix = format_tag_label(&iface_tag_ids);
             let entry = by_pair.entry((e.caller, e.provider)).or_default();
             entry.0.push(format!("{label}{symbol}{ctx_suffix}"));
             // First non-None interface highlight wins the link's color (matches
@@ -649,6 +649,7 @@ fn sanitize_for_mermaid(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::highlights::Selection;
     use crate::model::{
         ComponentNode, FuncSignature, InstanceInterface, InterfaceConnection, InterfaceType,
         ValueType,
@@ -1224,7 +1225,7 @@ mod tests {
     fn mermaid_graph_highlight_emits_classdef_and_class() {
         let graph = simple_chain_graph();
         let mut h = Highlights::new();
-        h.mark_node("srv");
+        h.mark(Selection::node("srv"));
         let output = generate_mermaid(
             &graph,
             DetailLevel::Graph,
@@ -1246,7 +1247,7 @@ mod tests {
     fn mermaid_graph_highlight_color_override() {
         let graph = simple_chain_graph();
         let mut h = Highlights::new();
-        h.mark_node_with("srv", HighlightColor::Orange);
+        h.mark(Selection::node("srv").color(HighlightColor::Orange));
         let output = generate_mermaid(
             &graph,
             DetailLevel::Graph,
@@ -1268,7 +1269,8 @@ mod tests {
     fn mermaid_graph_highlight_edge_emits_linkstyle() {
         let graph = simple_chain_graph();
         let mut h = Highlights::new();
-        h.highlight_edge("wasi:http/handler@0.3.0::middleware->srv", "drained");
+        h.register_tag(1, "drained").unwrap();
+        h.mark(Selection::edge("wasi:http/handler@0.3.0::middleware->srv").tag(1));
         let output = generate_mermaid(
             &graph,
             DetailLevel::Graph,
@@ -1350,7 +1352,7 @@ mod tests {
         g.add_export("wasi:keyvalue/store@0.1.0".into(), 3, None);
 
         let mut h = Highlights::new();
-        h.mark_node("logger");
+        h.mark(Selection::node("logger"));
         let output = generate_mermaid(
             &g,
             DetailLevel::Graph,

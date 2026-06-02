@@ -9,7 +9,7 @@
 //! display name.
 
 use crate::canonical_id::canonical_edge_id;
-use crate::highlights::{format_context_label, HighlightColor, Highlights};
+use crate::highlights::{format_tag_label, HighlightColor, Highlights};
 use crate::model::CompositionGraph;
 use crate::output::SymbolMap;
 use crate::subgraph::{compute_export_subgraphs, shared_instances, ExportSubgraph, SubgraphEdge};
@@ -419,8 +419,8 @@ struct Interface {
     /// Highlight color for this specific interface, if its canonical edge
     /// ID matched a highlight key.
     highlight: Option<HighlightColor>,
-    /// 1-based context IDs attached to this interface.
-    context_ids: Vec<usize>,
+    /// Consumer-assigned tag IDs attached to this interface.
+    tag_ids: Vec<u32>,
 }
 
 struct Export {
@@ -430,7 +430,7 @@ struct Export {
     type_lines: Vec<String>,
     rendered_label: String,
     highlight: Option<HighlightColor>,
-    context_ids: Vec<usize>,
+    tag_ids: Vec<u32>,
 }
 
 fn layout_subgraph(
@@ -452,14 +452,14 @@ fn layout_subgraph(
         } else {
             None
         };
-        let (iface_highlight, iface_context_ids) =
+        let (iface_highlight, iface_tag_ids) =
             edge_highlight(graph, highlights, e.caller, e.provider, &e.interface);
         let iface = Interface {
             label: crate::model::short_interface_name(&e.interface),
             fingerprint,
             type_lines: iface_type_lines,
             highlight: iface_highlight,
-            context_ids: iface_context_ids,
+            tag_ids: iface_tag_ids,
         };
         by_pair
             .entry((e.caller, e.provider))
@@ -492,16 +492,16 @@ fn layout_subgraph(
         if truncated {
             any_truncated = true;
         }
-        let (highlight, context_ids) = highlights
+        let (highlight, tag_ids) = highlights
             .map(|h| {
                 let id = node.canonical_id();
-                (h.node_color(id), h.node_context_ids(id))
+                (h.node_color(id), h.node_tag_ids(id))
             })
             .unwrap_or((None, Vec::new()));
-        let label_with_ctx = if context_ids.is_empty() {
+        let label_with_ctx = if tag_ids.is_empty() {
             label
         } else {
-            format!("{}{}", label, format_context_label(&context_ids))
+            format!("{}{}", label, format_tag_label(&tag_ids))
         };
         nodes.insert(
             idx,
@@ -524,7 +524,7 @@ fn layout_subgraph(
         } else {
             (Vec::new(), None)
         };
-        let (highlight, context_ids) = highlights
+        let (highlight, tag_ids) = highlights
             .map(|h| {
                 let provider_label = graph
                     .nodes
@@ -532,7 +532,7 @@ fn layout_subgraph(
                     .map(|n| n.canonical_id().to_string())
                     .unwrap_or_default();
                 let id = canonical_edge_id(&sg.interface_name, None, &provider_label);
-                (h.edge_color(&id), h.edge_context_ids(&id))
+                (h.edge_color(&id), h.edge_tag_ids(&id))
             })
             .unwrap_or((None, Vec::new()));
         vec![Export {
@@ -542,7 +542,7 @@ fn layout_subgraph(
             type_lines,
             rendered_label: String::new(),
             highlight,
-            context_ids,
+            tag_ids,
         }]
     };
 
@@ -555,8 +555,8 @@ fn layout_subgraph(
     }
 }
 
-/// Look up the highlight + context IDs for an internal edge by computing
-/// its canonical edge ID from the (caller, provider) display labels and the
+/// Look up the highlight + tag IDs for an internal edge by computing its
+/// canonical edge ID from the (caller, provider) display labels and the
 /// interface name.  Falls back to `(None, vec![])` when there are no
 /// highlights or the lookup misses.
 fn edge_highlight(
@@ -565,7 +565,7 @@ fn edge_highlight(
     caller: u32,
     provider: u32,
     interface: &str,
-) -> (Option<HighlightColor>, Vec<usize>) {
+) -> (Option<HighlightColor>, Vec<u32>) {
     let Some(h) = highlights else {
         return (None, Vec::new());
     };
@@ -575,7 +575,7 @@ fn edge_highlight(
         return (None, Vec::new());
     };
     let id = canonical_edge_id(interface, Some(caller_label), provider_label);
-    (h.edge_color(&id), h.edge_context_ids(&id))
+    (h.edge_color(&id), h.edge_tag_ids(&id))
 }
 
 fn interface_type_lines(
@@ -953,7 +953,7 @@ fn render(
     let mut sized = layout.clone_shallow();
     for exp in sized.exports.iter_mut() {
         let sym = symbols.assign(true, exp.fingerprint.as_deref(), exp.type_lines.clone());
-        let ctx_suffix = format_context_label(&exp.context_ids);
+        let ctx_suffix = format_tag_label(&exp.tag_ids);
         let base = if sym.is_empty() {
             exp.label.clone()
         } else {
@@ -972,7 +972,7 @@ fn render(
             .map(|iface| {
                 let sym =
                     symbols.assign(true, iface.fingerprint.as_deref(), iface.type_lines.clone());
-                let ctx_suffix = format_context_label(&iface.context_ids);
+                let ctx_suffix = format_tag_label(&iface.tag_ids);
                 let base = if sym.is_empty() {
                     iface.label.clone()
                 } else {
@@ -1166,7 +1166,7 @@ impl Layout {
                     type_lines: x.type_lines.clone(),
                     rendered_label: x.rendered_label.clone(),
                     highlight: x.highlight,
-                    context_ids: x.context_ids.clone(),
+                    tag_ids: x.tag_ids.clone(),
                 })
                 .collect(),
             nodes: self.nodes.clone(),
@@ -1588,6 +1588,7 @@ fn emit_row_range(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::highlights::Selection;
     use crate::test_utils::*;
 
     #[test]
@@ -1713,7 +1714,7 @@ mod tests {
         // mark srv → its box should render with `┏━┓ ┃ ┃ ┗━┛`.
         let g = simple_chain_graph();
         let mut h = Highlights::new();
-        h.mark_node("srv");
+        h.mark(Selection::node("srv"));
         let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
         assert!(
             out.contains('┏') && out.contains('┓') && out.contains('━'),
@@ -1751,7 +1752,7 @@ mod tests {
         g.add_export("wasi:keyvalue/store@0.1.0".into(), 3, None);
 
         let mut h = Highlights::new();
-        h.mark_node("logger");
+        h.mark(Selection::node("logger"));
         let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
         // Heavy chars present (highlight applied).
         assert!(
@@ -1765,10 +1766,11 @@ mod tests {
     }
 
     #[test]
-    fn highlighted_edge_label_carries_context_bracket() {
+    fn highlighted_edge_label_carries_tag_bracket() {
         let g = simple_chain_graph();
         let mut h = Highlights::new();
-        h.highlight_edge("wasi:http/handler@0.3.0::middleware->srv", "drained");
+        h.register_tag(1, "drained").unwrap();
+        h.mark(Selection::edge("wasi:http/handler@0.3.0::middleware->srv").tag(1));
         let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
         assert!(
             out.contains("handler[1]"),
@@ -1777,10 +1779,11 @@ mod tests {
     }
 
     #[test]
-    fn highlighted_node_label_carries_context_bracket() {
+    fn highlighted_node_label_carries_tag_bracket() {
         let g = simple_chain_graph();
         let mut h = Highlights::new();
-        h.highlight_node("srv", "outdated");
+        h.register_tag(1, "outdated").unwrap();
+        h.mark(Selection::node("srv").tag(1));
         let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
         assert!(
             out.contains("srv[1]"),
@@ -1789,11 +1792,12 @@ mod tests {
     }
 
     #[test]
-    fn tags_appended_when_highlights_have_contexts() {
+    fn tags_appended_when_highlights_have_tags() {
         let g = simple_chain_graph();
         let mut h = Highlights::new();
-        h.highlight_node("srv", "outdated");
-        h.highlight_edge("wasi:http/handler@0.3.0::middleware->srv", "drained");
+        h.register_tags([(1, "outdated"), (2, "drained")]).unwrap();
+        h.mark(Selection::node("srv").tag(1));
+        h.mark(Selection::edge("wasi:http/handler@0.3.0::middleware->srv").tag(2));
         let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
         assert!(out.contains("Tags:"), "no Tags section in:\n{out}");
         assert!(out.contains("1 outdated"), "missing tag entry 1 in:\n{out}");
@@ -1801,15 +1805,15 @@ mod tests {
     }
 
     #[test]
-    fn no_tags_when_no_contexts() {
-        // mark_* without contexts should not produce a tag list.
+    fn no_tags_section_when_no_tags_registered() {
+        // mark with no tags attached should not produce a Tags section.
         let g = simple_chain_graph();
         let mut h = Highlights::new();
-        h.mark_node("srv");
+        h.mark(Selection::node("srv"));
         let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
         assert!(
             !out.contains("Tags:"),
-            "should not emit Tags when no contexts, got:\n{out}"
+            "should not emit Tags when no tags registered, got:\n{out}"
         );
     }
 
@@ -1817,7 +1821,7 @@ mod tests {
     fn use_color_wraps_highlighted_cells_in_ansi() {
         let g = simple_chain_graph();
         let mut h = Highlights::new();
-        h.mark_node("srv");
+        h.mark(Selection::node("srv"));
         let plain = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
         let colored = generate_graph_ascii(&g, false, None, Some(&h), true).ascii;
         assert!(
@@ -1834,9 +1838,9 @@ mod tests {
     fn unmatched_highlight_ids_surface_on_output() {
         let g = simple_chain_graph();
         let mut h = Highlights::new();
-        h.mark_node("srv"); // real
-        h.mark_node("middlewre"); // typo
-        h.mark_edge("nope::a->b"); // typo
+        h.mark(Selection::node("srv")); // real
+        h.mark(Selection::node("middlewre")); // typo
+        h.mark(Selection::edge("nope::a->b")); // typo
         let out = generate_graph_ascii(&g, false, None, Some(&h), false);
         // Both unmatched IDs should be surfaced; the matching one shouldn't.
         assert!(out
@@ -1855,7 +1859,8 @@ mod tests {
         // it and confirm the bracket label shows on the export marker.
         let g = simple_chain_graph();
         let mut h = Highlights::new();
-        h.highlight_edge("wasi:http/handler@0.3.0::->middleware", "ingress");
+        h.register_tag(1, "ingress").unwrap();
+        h.mark(Selection::edge("wasi:http/handler@0.3.0::->middleware").tag(1));
         let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
         assert!(
             out.contains("ext:handler[1]"),

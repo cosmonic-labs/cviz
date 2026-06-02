@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
@@ -5,7 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use cviz::output;
 use cviz::output::{DetailLevel, Direction, OutputFormat};
-use cviz::{HighlightColor, Highlights};
+use cviz::{HighlightColor, Highlights, Selection};
 
 #[derive(Parser, Debug)]
 #[command(name = "cviz")]
@@ -75,8 +76,14 @@ fn main() -> Result<()> {
         .with_context(|| format!("Failed to parse component: {}", args.file.display()))?;
 
     let mut highlights = Highlights::new();
+    // CLI-side ctx→tag-id map so consecutive `--highlight` flags that
+    // mention the same context string reuse the same tag number rather
+    // than each getting their own.  Auto-assigned in insertion order
+    // (first new ctx → 1, next → 2, …) so the in-diagram brackets line
+    // up with the Tags list under the rendering.
+    let mut ctx_to_tag: BTreeMap<String, u32> = BTreeMap::new();
     for spec in &args.highlight {
-        parse_highlight_spec(spec, &mut highlights)
+        parse_highlight_spec(spec, &mut highlights, &mut ctx_to_tag)
             .with_context(|| format!("Invalid --highlight value: {spec}"))?;
     }
     let highlights = if args.highlight.is_empty() {
@@ -172,7 +179,11 @@ fn main() -> Result<()> {
 /// `<id>` may contain `::`, `->`, etc. (canonical edge IDs do); the
 /// parser splits on the **first** `:` for the kind and recognises the
 /// **last unescaped** `@<color>` as the optional trailing color override.
-fn parse_highlight_spec(spec: &str, out: &mut Highlights) -> Result<()> {
+fn parse_highlight_spec(
+    spec: &str,
+    out: &mut Highlights,
+    ctx_to_tag: &mut BTreeMap<String, u32>,
+) -> Result<()> {
     let (kind, rest) = spec
         .split_once(':')
         .ok_or_else(|| anyhow!("missing `kind:` prefix; expected `node:` or `edge:`"))?;
@@ -197,17 +208,28 @@ fn parse_highlight_spec(spec: &str, out: &mut Highlights) -> Result<()> {
         return Err(anyhow!("id is empty"));
     }
 
-    match (kind, ctx, color) {
-        ("node", Some(c), Some(col)) => out.highlight_node_with(id, c, col),
-        ("node", Some(c), None) => out.highlight_node(id, c),
-        ("node", None, Some(col)) => out.mark_node_with(id, col),
-        ("node", None, None) => out.mark_node(id),
-        ("edge", Some(c), Some(col)) => out.highlight_edge_with(id, c, col),
-        ("edge", Some(c), None) => out.highlight_edge(id, c),
-        ("edge", None, Some(col)) => out.mark_edge_with(id, col),
-        ("edge", None, None) => out.mark_edge(id),
-        (k, _, _) => return Err(anyhow!("unknown kind `{k}`; expected `node` or `edge`")),
+    let mut sel = match kind {
+        "node" => Selection::node(id),
+        "edge" => Selection::edge(id),
+        k => return Err(anyhow!("unknown kind `{k}`; expected `node` or `edge`")),
+    };
+    if let Some(ctx) = ctx {
+        let tag_id = match ctx_to_tag.get(&ctx) {
+            Some(&existing) => existing,
+            None => {
+                let next = ctx_to_tag.len() as u32 + 1;
+                out.register_tag(next, ctx.clone())
+                    .map_err(|e| anyhow!("{e}"))?;
+                ctx_to_tag.insert(ctx, next);
+                next
+            }
+        };
+        sel = sel.tag(tag_id);
     }
+    if let Some(col) = color {
+        sel = sel.color(col);
+    }
+    out.mark(sel);
     Ok(())
 }
 
@@ -281,62 +303,58 @@ fn terminal_columns() -> Option<usize> {
 mod tests {
     use super::*;
 
+    /// Convenience: run a single spec through the parser starting from an
+    /// empty Highlights / tag map.  Most tests don't need state across
+    /// multiple specs.
+    fn parse_one(spec: &str) -> Result<Highlights> {
+        let mut h = Highlights::new();
+        let mut map = BTreeMap::new();
+        parse_highlight_spec(spec, &mut h, &mut map)?;
+        Ok(h)
+    }
+
     #[test]
     fn parse_highlight_node_basic() {
-        let mut h = Highlights::new();
-        parse_highlight_spec("node:srv", &mut h).unwrap();
+        let h = parse_one("node:srv").unwrap();
         assert!(h.is_node_highlighted("srv"));
-        assert!(h.node_context_ids("srv").is_empty());
+        assert!(h.node_tag_ids("srv").is_empty());
         assert_eq!(h.node_color("srv"), Some(HighlightColor::Yellow));
     }
 
     #[test]
     fn parse_highlight_node_with_context() {
-        let mut h = Highlights::new();
-        parse_highlight_spec("node:srv=outdated", &mut h).unwrap();
-        assert_eq!(h.node_context_ids("srv"), vec![1]);
+        let h = parse_one("node:srv=outdated").unwrap();
+        assert_eq!(h.node_tag_ids("srv"), vec![1]);
         assert_eq!(h.tag_lines(), vec!["1 outdated".to_string()]);
     }
 
     #[test]
     fn parse_highlight_node_with_color() {
-        let mut h = Highlights::new();
-        parse_highlight_spec("node:srv@orange", &mut h).unwrap();
+        let h = parse_one("node:srv@orange").unwrap();
         assert_eq!(h.node_color("srv"), Some(HighlightColor::Orange));
     }
 
     #[test]
     fn parse_highlight_node_full() {
-        let mut h = Highlights::new();
-        parse_highlight_spec("node:srv=outdated@cyan", &mut h).unwrap();
+        let h = parse_one("node:srv=outdated@cyan").unwrap();
         assert_eq!(h.node_color("srv"), Some(HighlightColor::Cyan));
-        assert_eq!(h.node_context_ids("srv"), vec![1]);
+        assert_eq!(h.node_tag_ids("srv"), vec![1]);
     }
 
     #[test]
     fn parse_highlight_edge_with_canonical_id() {
-        let mut h = Highlights::new();
-        parse_highlight_spec(
-            "edge:wasi:http/handler@0.3.0::middleware->srv=drained",
-            &mut h,
-        )
-        .unwrap();
+        let h = parse_one("edge:wasi:http/handler@0.3.0::middleware->srv=drained").unwrap();
         // The `@0.3.0` should NOT be parsed as a color — it's part of the id.
         assert!(h.is_edge_highlighted("wasi:http/handler@0.3.0::middleware->srv"));
         assert_eq!(
-            h.edge_context_ids("wasi:http/handler@0.3.0::middleware->srv"),
+            h.edge_tag_ids("wasi:http/handler@0.3.0::middleware->srv"),
             vec![1]
         );
     }
 
     #[test]
     fn parse_highlight_edge_with_color_and_canonical_id() {
-        let mut h = Highlights::new();
-        parse_highlight_spec(
-            "edge:wasi:http/handler@0.3.0::middleware->srv=drained@orange",
-            &mut h,
-        )
-        .unwrap();
+        let h = parse_one("edge:wasi:http/handler@0.3.0::middleware->srv=drained@orange").unwrap();
         assert_eq!(
             h.edge_color("wasi:http/handler@0.3.0::middleware->srv"),
             Some(HighlightColor::Orange)
@@ -346,27 +364,46 @@ mod tests {
     #[test]
     fn parse_highlight_escaped_at_in_context() {
         // Backslash escapes `@` so it ends up in the context.
-        let mut h = Highlights::new();
-        parse_highlight_spec("node:srv=tag\\@v2", &mut h).unwrap();
+        let h = parse_one("node:srv=tag\\@v2").unwrap();
         assert_eq!(h.tag_lines(), vec!["1 tag@v2".to_string()]);
         assert_eq!(h.node_color("srv"), Some(HighlightColor::Yellow));
     }
 
     #[test]
-    fn parse_highlight_rejects_bad_kind() {
+    fn parse_highlight_repeated_ctx_reuses_tag_id() {
+        // First spec assigns tag 1 to "drained"; second spec mentions the
+        // same context and should reuse 1 rather than mint 2.
         let mut h = Highlights::new();
-        assert!(parse_highlight_spec("nope:srv", &mut h).is_err());
+        let mut map = BTreeMap::new();
+        parse_highlight_spec("node:srv=drained", &mut h, &mut map).unwrap();
+        parse_highlight_spec("edge:e1::a->b=drained", &mut h, &mut map).unwrap();
+        assert_eq!(h.node_tag_ids("srv"), vec![1]);
+        assert_eq!(h.edge_tag_ids("e1::a->b"), vec![1]);
+        assert_eq!(h.tag_lines(), vec!["1 drained".to_string()]);
+    }
+
+    #[test]
+    fn parse_highlight_distinct_ctxs_get_distinct_ids() {
+        let mut h = Highlights::new();
+        let mut map = BTreeMap::new();
+        parse_highlight_spec("node:srv=outdated", &mut h, &mut map).unwrap();
+        parse_highlight_spec("edge:e1::a->b=drained", &mut h, &mut map).unwrap();
+        assert_eq!(h.node_tag_ids("srv"), vec![1]);
+        assert_eq!(h.edge_tag_ids("e1::a->b"), vec![2]);
+    }
+
+    #[test]
+    fn parse_highlight_rejects_bad_kind() {
+        assert!(parse_one("nope:srv").is_err());
     }
 
     #[test]
     fn parse_highlight_rejects_empty_id() {
-        let mut h = Highlights::new();
-        assert!(parse_highlight_spec("node:", &mut h).is_err());
+        assert!(parse_one("node:").is_err());
     }
 
     #[test]
     fn parse_highlight_rejects_bad_color() {
-        let mut h = Highlights::new();
-        assert!(parse_highlight_spec("node:srv@chartreuse", &mut h).is_err());
+        assert!(parse_one("node:srv@chartreuse").is_err());
     }
 }
