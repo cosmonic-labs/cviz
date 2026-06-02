@@ -28,19 +28,9 @@ struct Args {
     #[arg(short = 'l', long, default_value = "handler-chain", value_enum)]
     detail: DetailLevel,
 
-    /// Show WIT type information on interface connections.
-    ///
-    /// Accepts a value: `-t true` (default) or `-t false` to hide types.
-    /// Bare `-t` is equivalent to `-t true`.
-    #[arg(
-        short = 't',
-        long,
-        default_value_t = true,
-        num_args = 0..=1,
-        default_missing_value = "true",
-        action = clap::ArgAction::Set,
-    )]
-    types: bool,
+    /// Hide WIT type information on interface connections.
+    #[arg(long = "no-types", action = clap::ArgAction::SetTrue)]
+    no_types: bool,
 
     /// Output file (stdout if not specified)
     #[arg(short, long)]
@@ -103,6 +93,7 @@ fn main() -> Result<()> {
         ColorMode::Auto => args.output.is_none() && std::io::stdout().is_terminal(),
     };
 
+    let show_types = !args.no_types;
     let mut condensed = false;
     let mut unmatched_ids: Vec<String> = Vec::new();
     let diagram = match args.format {
@@ -110,7 +101,7 @@ fn main() -> Result<()> {
             let max_w = terminal_columns();
             let out = output::graph::generate_graph_ascii(
                 &graph,
-                args.types,
+                show_types,
                 max_w,
                 highlights.as_ref(),
                 use_color,
@@ -119,12 +110,12 @@ fn main() -> Result<()> {
             unmatched_ids = out.unmatched_highlight_ids;
             out.ascii
         }
-        OutputFormat::Ascii => output::ascii::generate_ascii(&graph, args.detail, args.types),
+        OutputFormat::Ascii => output::ascii::generate_ascii(&graph, args.detail, show_types),
         OutputFormat::Mermaid => output::mermaid::generate_mermaid(
             &graph,
             args.detail,
             args.direction,
-            args.types,
+            show_types,
             highlights.as_ref(),
         ),
         OutputFormat::Json => output::json::generate_json(&graph, false)?,

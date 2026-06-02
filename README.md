@@ -45,8 +45,7 @@ The `-l` flag selects what the renderer draws:
   non-trivial compositions and the only level that supports
   highlighting.
 
-A `graph` render of a small two-component composition (`-t false` to
-suppress type symbols):
+A `graph` render of a small two-component composition:
 
 ```
 ╞══ handler ════════════════════════════════════════
