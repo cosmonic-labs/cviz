@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use cviz::output;
-use cviz::output::{DetailLevel, Direction, OutputFormat};
+use cviz::output::graph::GraphRenderOpts;
+use cviz::output::{Direction, OutputFormat};
 use cviz::{HighlightColor, Highlights, Selection};
 
 #[derive(Parser, Debug)]
@@ -25,37 +26,38 @@ struct Args {
     #[arg(short, long, default_value = "lr", value_enum)]
     direction: Direction,
 
-    /// Detail level
-    #[arg(short = 'l', long, default_value = "handler-chain", value_enum)]
-    detail: DetailLevel,
+    /// Show only chain interfaces (exported AND re-imported inter-component).
+    #[arg(long = "chain-only", action = clap::ArgAction::SetTrue)]
+    chain_only: bool,
 
-    /// Hide WIT type information on interface connections.
+    /// Substring match on interface name. Applied after `--chain-only`.
+    #[arg(long)]
+    filter: Option<String>,
+
+    /// Show host imports (dashed in mermaid, footer in ASCII).
+    #[arg(long = "host-imports", action = clap::ArgAction::SetTrue)]
+    host_imports: bool,
+
+    /// Hide WIT type signatures on interface connections.
     #[arg(long = "no-types", action = clap::ArgAction::SetTrue)]
     no_types: bool,
 
-    /// Output file (stdout if not specified)
+    /// Output file (stdout if not specified).
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// Highlight a node or edge in the graph view.  Repeatable.  Format:
+    /// Highlight a node or edge. Repeatable.
     ///
-    ///   node:<id>[=<context>][>><color>]
-    ///   edge:<id>[=<context>][>><color>]
+    /// Format: `{node|edge}:<id>[=<context>][>><color>]`.
+    /// Colors: yellow (default), cyan, magenta, blue, orange, red, green, white.
     ///
     /// Examples:
     ///   --highlight node:srv
-    ///   --highlight 'node:srv=outdated'
-    ///   --highlight 'edge:wasi:http/handler@0.3.0::middleware->srv=drained>>orange'
-    ///
-    /// Colors: yellow (default), cyan, magenta, blue, orange, red,
-    /// green, white.  (Red and green together are confusable for ~5% of
-    /// readers — pick distinct hues when designing for a colorblind
-    /// audience.)  Only the `graph` detail level renders highlights.
+    ///   --highlight 'node:srv=outdated>>orange'
     #[arg(long = "highlight", value_name = "SPEC", action = clap::ArgAction::Append)]
     highlight: Vec<String>,
 
-    /// Force ANSI color emission (otherwise auto-detected from the stdout
-    /// TTY).  Has no effect when `-o` is set or when the format isn't ASCII.
+    /// Force ANSI color (auto-detected by default). Only affects ASCII to stdout.
     #[arg(long, default_value = "auto")]
     color: ColorMode,
 }
@@ -98,13 +100,19 @@ fn main() -> Result<()> {
     };
 
     let show_types = !args.no_types;
+    let opts = GraphRenderOpts {
+        chain_only: args.chain_only,
+        filter: args.filter.clone(),
+        show_host_imports: args.host_imports,
+    };
     let mut condensed = false;
     let mut unmatched_ids: Vec<String> = Vec::new();
     let diagram = match args.format {
-        OutputFormat::Ascii if matches!(args.detail, DetailLevel::Graph) => {
+        OutputFormat::Ascii => {
             let max_w = terminal_columns();
             let out = output::graph::generate_graph_ascii(
                 &graph,
+                &opts,
                 show_types,
                 max_w,
                 highlights.as_ref(),
@@ -114,10 +122,9 @@ fn main() -> Result<()> {
             unmatched_ids = out.unmatched_highlight_ids;
             out.ascii
         }
-        OutputFormat::Ascii => output::ascii::generate_ascii(&graph, args.detail, show_types),
         OutputFormat::Mermaid => output::mermaid::generate_mermaid(
             &graph,
-            args.detail,
+            &opts,
             args.direction,
             show_types,
             highlights.as_ref(),

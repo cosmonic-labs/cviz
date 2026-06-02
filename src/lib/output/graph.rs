@@ -20,6 +20,57 @@ pub struct GraphAsciiOutput {
     pub unmatched_highlight_ids: Vec<String>,
 }
 
+/// Rendering options shared by the ASCII and Mermaid graph renderers.
+///
+/// Defaults render every export subgraph without host imports.
+#[derive(Debug, Clone, Default)]
+pub struct GraphRenderOpts {
+    /// Filter to "chain" interfaces — those that are both exported by the
+    /// composition and re-imported inter-component (see
+    /// [`crate::find_chain_interfaces`]).
+    pub chain_only: bool,
+    /// Substring match on the fully-qualified interface name. Applied
+    /// after `chain_only`. `None` = no filter.
+    pub filter: Option<String>,
+    /// Render host imports as dashed branches into each importing node.
+    pub show_host_imports: bool,
+}
+
+/// Compute the export subgraphs and apply `chain_only` / `filter`.
+pub(crate) fn filtered_export_subgraphs(
+    graph: &CompositionGraph,
+    opts: &GraphRenderOpts,
+) -> Vec<ExportSubgraph> {
+    let mut subgraphs = compute_export_subgraphs(graph);
+    if opts.chain_only {
+        let chain: BTreeSet<String> = crate::find_chain_interfaces(graph).into_iter().collect();
+        subgraphs.retain(|sg| chain.contains(&sg.interface_name));
+    }
+    if let Some(pat) = opts.filter.as_deref() {
+        subgraphs.retain(|sg| sg.interface_name.contains(pat));
+    }
+    subgraphs
+}
+
+/// Human-readable message for the case where filtering produced no subgraphs.
+/// Phrased so the user knows which flag to relax.
+pub(crate) fn empty_render_message(opts: &GraphRenderOpts) -> String {
+    match (opts.chain_only, opts.filter.as_deref()) {
+        (true, Some(f)) => format!(
+            "No chained interfaces matching `{f}` found. \
+             Try dropping --chain-only or --filter."
+        ),
+        (true, None) => "No chained interfaces found. \
+             Try dropping --chain-only to see all exports."
+            .to_string(),
+        (false, Some(f)) => format!(
+            "No exported interfaces matching `{f}` found. \
+             Try a different --filter pattern."
+        ),
+        (false, None) => "No component instances found".to_string(),
+    }
+}
+
 /// Width cap for a node label.  Names wider than this are middle-truncated
 /// with an ellipsis.
 pub const MAX_NODE_LABEL: usize = 28;
@@ -35,13 +86,17 @@ pub const MAX_NODE_LABEL: usize = 28;
 /// are rendered as a single unnamed fallback block.
 pub fn generate_graph_ascii(
     graph: &CompositionGraph,
+    opts: &GraphRenderOpts,
     show_types: bool,
     max_width: Option<usize>,
     highlights: Option<&Highlights>,
     use_color: bool,
 ) -> GraphAsciiOutput {
-    let mut subgraphs = compute_export_subgraphs(graph);
-    if subgraphs.is_empty() {
+    let mut subgraphs = filtered_export_subgraphs(graph, opts);
+    // Only fall back to the unnamed reachability block when there are no
+    // exports at all (preserving original behaviour) — not when filters
+    // legitimately reduce the set to zero.
+    if subgraphs.is_empty() && !opts.chain_only && opts.filter.is_none() {
         if let Some(fallback) = fallback_subgraph(graph) {
             subgraphs.push(fallback);
         }
@@ -49,7 +104,7 @@ pub fn generate_graph_ascii(
     if subgraphs.is_empty() {
         let (nodes, edges) = canonical_ids(graph, &[]);
         return GraphAsciiOutput {
-            ascii: "No component instances found".to_string(),
+            ascii: empty_render_message(opts),
             condensed: false,
             unmatched_highlight_ids: collect_unmatched(highlights, &nodes, &edges),
         };
@@ -102,6 +157,13 @@ pub fn generate_graph_ascii(
     }
 
     let mut out = sections.join("\n\n\n");
+    if opts.show_host_imports {
+        append_section(
+            &mut out,
+            "Host imports:",
+            host_import_lines(graph, &already_rendered),
+        );
+    }
     append_section(&mut out, "Signatures:", symbols.key_lines());
 
     let (present_nodes, present_edges) = canonical_ids(graph, &subgraphs);
@@ -135,6 +197,37 @@ fn append_section(out: &mut String, header: &str, lines: Vec<String>) {
         out.push_str("  ");
         out.push_str(&line);
     }
+}
+
+/// Collect `"<consumer> ┊ <short-iface>"` lines for every host import of
+/// every rendered node, sorted by consumer then interface.
+fn host_import_lines(graph: &CompositionGraph, rendered: &BTreeSet<u32>) -> Vec<String> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for &idx in rendered {
+        let Some(node) = graph.nodes.get(&idx) else {
+            continue;
+        };
+        for imp in &node.imports {
+            if !imp.is_host_import {
+                continue;
+            }
+            pairs.push((
+                node.display_label().to_string(),
+                crate::model::short_interface_name(&imp.interface_name),
+            ));
+        }
+    }
+    pairs.sort();
+    pairs.dedup();
+    let label_w = pairs
+        .iter()
+        .map(|(c, _)| c.chars().count())
+        .max()
+        .unwrap_or(0);
+    pairs
+        .into_iter()
+        .map(|(c, i)| format!("{:width$} ┊ {}", c, i, width = label_w))
+        .collect()
 }
 
 /// Combine `unmatched_node_ids` + `unmatched_edge_ids` into one owned
@@ -1407,7 +1500,8 @@ mod tests {
     #[test]
     fn simple_chain_renders_a_box_per_node() {
         let g = simple_chain_graph();
-        let out = generate_graph_ascii(&g, false, None, None, false).ascii;
+        let out =
+            generate_graph_ascii(&g, &GraphRenderOpts::default(), false, None, None, false).ascii;
         assert!(out.contains("middleware"), "middleware not in:\n{out}");
         assert!(out.contains("srv"), "srv not in:\n{out}");
         assert!(
@@ -1419,7 +1513,8 @@ mod tests {
     #[test]
     fn simple_chain_has_handler_edge_label() {
         let g = simple_chain_graph();
-        let out = generate_graph_ascii(&g, false, None, None, false).ascii;
+        let out =
+            generate_graph_ascii(&g, &GraphRenderOpts::default(), false, None, None, false).ascii;
         assert!(out.contains("handler"), "no handler label in:\n{out}");
         assert!(out.contains('▶'), "no arrow head in:\n{out}");
     }
@@ -1427,7 +1522,8 @@ mod tests {
     #[test]
     fn long_chain_has_three_boxes() {
         let g = long_chain_graph();
-        let out = generate_graph_ascii(&g, false, None, None, false).ascii;
+        let out =
+            generate_graph_ascii(&g, &GraphRenderOpts::default(), false, None, None, false).ascii;
         for name in ["gateway", "service", "backend"] {
             assert!(out.contains(name), "{name} missing from:\n{out}");
         }
@@ -1440,14 +1536,16 @@ mod tests {
     #[test]
     fn empty_graph_message() {
         let g = crate::model::CompositionGraph::new();
-        let out = generate_graph_ascii(&g, false, None, None, false).ascii;
+        let out =
+            generate_graph_ascii(&g, &GraphRenderOpts::default(), false, None, None, false).ascii;
         assert!(out.contains("No component instances"), "got:\n{out}");
     }
 
     #[test]
     fn two_chains_render_as_separate_sections() {
         let g = two_chain_graph();
-        let out = generate_graph_ascii(&g, false, None, None, false).ascii;
+        let out =
+            generate_graph_ascii(&g, &GraphRenderOpts::default(), false, None, None, false).ascii;
         for name in ["srv-http", "mw-http", "db", "cache"] {
             assert!(out.contains(name), "{name} missing from:\n{out}");
         }
@@ -1459,7 +1557,8 @@ mod tests {
     #[test]
     fn types_on_emits_symbol_and_signatures_section() {
         let g = typed_chain_graph();
-        let out = generate_graph_ascii(&g, true, None, None, false).ascii;
+        let out =
+            generate_graph_ascii(&g, &GraphRenderOpts::default(), true, None, None, false).ascii;
         assert!(out.contains('✦'), "expected symbol in:\n{out}");
         assert!(
             out.contains("Signatures:"),
@@ -1474,7 +1573,8 @@ mod tests {
     #[test]
     fn types_off_no_symbol_no_signatures_section() {
         let g = typed_chain_graph();
-        let out = generate_graph_ascii(&g, false, None, None, false).ascii;
+        let out =
+            generate_graph_ascii(&g, &GraphRenderOpts::default(), false, None, None, false).ascii;
         assert!(
             !out.contains('✦'),
             "should not emit symbol when types off:\n{out}"
@@ -1488,7 +1588,8 @@ mod tests {
     #[test]
     fn export_marker_inline_with_arrow() {
         let g = simple_chain_graph();
-        let out = generate_graph_ascii(&g, false, None, None, false).ascii;
+        let out =
+            generate_graph_ascii(&g, &GraphRenderOpts::default(), false, None, None, false).ascii;
         let lines: Vec<&str> = out.lines().collect();
         assert!(
             lines.iter().any(|l| l.contains("ext:handler")
@@ -1513,7 +1614,8 @@ mod tests {
                 fingerprint: None,
             });
         }
-        let out = generate_graph_ascii(&g, false, None, None, false).ascii;
+        let out =
+            generate_graph_ascii(&g, &GraphRenderOpts::default(), false, None, None, false).ascii;
         assert!(out.contains("adapter"));
         assert!(out.contains("mdl-a"));
     }
@@ -1528,7 +1630,15 @@ mod tests {
         let g = simple_chain_graph();
         let mut h = Highlights::default();
         h.mark(Selection::node("srv"));
-        let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
+        let out = generate_graph_ascii(
+            &g,
+            &GraphRenderOpts::default(),
+            false,
+            None,
+            Some(&h),
+            false,
+        )
+        .ascii;
         assert!(
             out.contains('┏') && out.contains('┓') && out.contains('━'),
             "expected heavy box chars for highlighted srv in:\n{out}"
@@ -1566,7 +1676,15 @@ mod tests {
 
         let mut h = Highlights::default();
         h.mark(Selection::node("logger"));
-        let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
+        let out = generate_graph_ascii(
+            &g,
+            &GraphRenderOpts::default(),
+            false,
+            None,
+            Some(&h),
+            false,
+        )
+        .ascii;
         // Heavy chars present (highlight applied).
         assert!(
             out.contains('┏') && out.contains('┗'),
@@ -1584,7 +1702,15 @@ mod tests {
         let mut h = Highlights::default();
         h.register_tag(1, "drained").unwrap();
         h.mark(Selection::edge("wasi:http/handler@0.3.0::middleware->srv").tag(1));
-        let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
+        let out = generate_graph_ascii(
+            &g,
+            &GraphRenderOpts::default(),
+            false,
+            None,
+            Some(&h),
+            false,
+        )
+        .ascii;
         assert!(
             out.contains("handler[1]"),
             "expected `handler[1]` edge label in:\n{out}"
@@ -1597,7 +1723,15 @@ mod tests {
         let mut h = Highlights::default();
         h.register_tag(1, "outdated").unwrap();
         h.mark(Selection::node("srv").tag(1));
-        let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
+        let out = generate_graph_ascii(
+            &g,
+            &GraphRenderOpts::default(),
+            false,
+            None,
+            Some(&h),
+            false,
+        )
+        .ascii;
         assert!(
             out.contains("srv[1]"),
             "expected `srv[1]` inside box, got:\n{out}"
@@ -1611,7 +1745,15 @@ mod tests {
         h.register_tags([(1, "outdated"), (2, "drained")]).unwrap();
         h.mark(Selection::node("srv").tag(1));
         h.mark(Selection::edge("wasi:http/handler@0.3.0::middleware->srv").tag(2));
-        let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
+        let out = generate_graph_ascii(
+            &g,
+            &GraphRenderOpts::default(),
+            false,
+            None,
+            Some(&h),
+            false,
+        )
+        .ascii;
         assert!(out.contains("Tags:"), "no Tags section in:\n{out}");
         assert!(out.contains("1 outdated"), "missing tag entry 1 in:\n{out}");
         assert!(out.contains("2 drained"), "missing tag entry 2 in:\n{out}");
@@ -1623,7 +1765,15 @@ mod tests {
         let g = simple_chain_graph();
         let mut h = Highlights::default();
         h.mark(Selection::node("srv"));
-        let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
+        let out = generate_graph_ascii(
+            &g,
+            &GraphRenderOpts::default(),
+            false,
+            None,
+            Some(&h),
+            false,
+        )
+        .ascii;
         assert!(
             !out.contains("Tags:"),
             "should not emit Tags when no tags registered, got:\n{out}"
@@ -1635,8 +1785,18 @@ mod tests {
         let g = simple_chain_graph();
         let mut h = Highlights::default();
         h.mark(Selection::node("srv"));
-        let plain = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
-        let colored = generate_graph_ascii(&g, false, None, Some(&h), true).ascii;
+        let plain = generate_graph_ascii(
+            &g,
+            &GraphRenderOpts::default(),
+            false,
+            None,
+            Some(&h),
+            false,
+        )
+        .ascii;
+        let colored =
+            generate_graph_ascii(&g, &GraphRenderOpts::default(), false, None, Some(&h), true)
+                .ascii;
         assert!(
             !plain.contains('\x1b'),
             "plain output should have no ANSI escapes"
@@ -1654,7 +1814,14 @@ mod tests {
         h.mark(Selection::node("srv")); // real
         h.mark(Selection::node("middlewre")); // typo
         h.mark(Selection::edge("nope::a->b")); // typo
-        let out = generate_graph_ascii(&g, false, None, Some(&h), false);
+        let out = generate_graph_ascii(
+            &g,
+            &GraphRenderOpts::default(),
+            false,
+            None,
+            Some(&h),
+            false,
+        );
         // Both unmatched IDs should be surfaced; the matching one shouldn't.
         assert!(out
             .unmatched_highlight_ids
@@ -1674,7 +1841,15 @@ mod tests {
         let mut h = Highlights::default();
         h.register_tag(1, "ingress").unwrap();
         h.mark(Selection::edge("wasi:http/handler@0.3.0::->middleware").tag(1));
-        let out = generate_graph_ascii(&g, false, None, Some(&h), false).ascii;
+        let out = generate_graph_ascii(
+            &g,
+            &GraphRenderOpts::default(),
+            false,
+            None,
+            Some(&h),
+            false,
+        )
+        .ascii;
         assert!(
             out.contains("ext:handler[1]"),
             "expected boundary export label to carry [1] bracket, got:\n{out}"
@@ -1709,10 +1884,183 @@ mod tests {
         g.add_node(3, cache);
         g.add_export("wasi:http/handler@0.3.0".into(), 2, None);
         g.add_export("wasi:keyvalue/store@0.1.0".into(), 3, None);
-        let out = generate_graph_ascii(&g, false, None, None, false).ascii;
+        let out =
+            generate_graph_ascii(&g, &GraphRenderOpts::default(), false, None, None, false).ascii;
         assert!(
             out.contains('╔') && out.contains('╗'),
             "expected double-line box for shared logger in:\n{out}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // GraphRenderOpts: chain_only and filter
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn chain_only_keeps_chain_interfaces() {
+        let g = two_chain_graph();
+        let opts = GraphRenderOpts {
+            chain_only: true,
+            ..Default::default()
+        };
+        let subs = filtered_export_subgraphs(&g, &opts);
+        // Both exports are chain interfaces (each appears as an import elsewhere).
+        assert_eq!(subs.len(), 2);
+    }
+
+    #[test]
+    fn chain_only_drops_non_chain_exports() {
+        use crate::model::{ComponentNode, CompositionGraph};
+        // One export that's also imported inter-component (a chain) and one
+        // export that's never imported (non-chain). chain_only should keep
+        // only the first.
+        let mut g = CompositionGraph::new();
+        g.add_node(1, ComponentNode::new("$base".into(), 0, 0));
+        let mut mid = ComponentNode::new("$mid".into(), 1, 1);
+        mid.add_import(crate::model::InterfaceConnection {
+            interface_name: "wasi:http/handler@0.3.0".into(),
+            source_instance: Some(1),
+            is_host_import: false,
+            interface_type: None,
+            fingerprint: None,
+        });
+        g.add_node(2, mid);
+        let leaf = ComponentNode::new("$leaf".into(), 2, 2);
+        g.add_node(3, leaf);
+        g.add_export("wasi:http/handler@0.3.0".into(), 2, None);
+        g.add_export("acme:standalone/api@1.0.0".into(), 3, None);
+
+        let all = filtered_export_subgraphs(&g, &GraphRenderOpts::default());
+        assert_eq!(all.len(), 2, "default has both exports");
+
+        let chain = filtered_export_subgraphs(
+            &g,
+            &GraphRenderOpts {
+                chain_only: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(chain.len(), 1);
+        assert!(chain[0].interface_name.contains("handler"));
+    }
+
+    #[test]
+    fn filter_substring_match() {
+        let g = two_chain_graph();
+        let http_only = filtered_export_subgraphs(
+            &g,
+            &GraphRenderOpts {
+                filter: Some("http".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(http_only.len(), 1);
+        assert!(http_only[0].interface_name.contains("http"));
+
+        let none_match = filtered_export_subgraphs(
+            &g,
+            &GraphRenderOpts {
+                filter: Some("nonexistent".into()),
+                ..Default::default()
+            },
+        );
+        assert!(none_match.is_empty());
+    }
+
+    #[test]
+    fn chain_only_and_filter_compose() {
+        let g = two_chain_graph();
+        let http_chain = filtered_export_subgraphs(
+            &g,
+            &GraphRenderOpts {
+                chain_only: true,
+                filter: Some("http".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(http_chain.len(), 1);
+        assert!(http_chain[0].interface_name.contains("http"));
+    }
+
+    #[test]
+    fn show_host_imports_off_by_default() {
+        let g = simple_chain_graph();
+        let out =
+            generate_graph_ascii(&g, &GraphRenderOpts::default(), false, None, None, false).ascii;
+        assert!(
+            !out.contains("Host imports:"),
+            "host imports footer should be absent by default, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn empty_message_mentions_chain_only_when_set() {
+        // Composition has exports but none are chains — chain_only filters them all out.
+        use crate::model::{ComponentNode, CompositionGraph};
+        let mut g = CompositionGraph::new();
+        g.add_node(1, ComponentNode::new("$base".into(), 0, 0));
+        g.add_export("acme:standalone/api@1.0.0".into(), 1, None);
+
+        let out = generate_graph_ascii(
+            &g,
+            &GraphRenderOpts {
+                chain_only: true,
+                ..Default::default()
+            },
+            false,
+            None,
+            None,
+            false,
+        )
+        .ascii;
+        assert!(
+            out.contains("chained interfaces") && out.contains("--chain-only"),
+            "should explain chain_only filtered everything, got: {out}"
+        );
+    }
+
+    #[test]
+    fn empty_message_mentions_filter_when_set() {
+        let g = simple_chain_graph();
+        let out = generate_graph_ascii(
+            &g,
+            &GraphRenderOpts {
+                filter: Some("nonexistent".into()),
+                ..Default::default()
+            },
+            false,
+            None,
+            None,
+            false,
+        )
+        .ascii;
+        assert!(
+            out.contains("nonexistent") && out.contains("--filter"),
+            "should mention pattern and flag, got: {out}"
+        );
+    }
+
+    #[test]
+    fn show_host_imports_renders_footer_per_consumer() {
+        // simple_chain_graph: $srv imports handler from host, $middleware imports log.
+        let g = simple_chain_graph();
+        let opts = GraphRenderOpts {
+            show_host_imports: true,
+            ..Default::default()
+        };
+        let out = generate_graph_ascii(&g, &opts, false, None, None, false).ascii;
+        assert!(
+            out.contains("Host imports:"),
+            "should have Host imports footer, got:\n{out}"
+        );
+        assert!(out.contains("srv"), "should list srv consumer");
+        assert!(
+            out.contains("┊ handler"),
+            "should label srv's host import as handler, got:\n{out}"
+        );
+        assert!(
+            out.contains("┊ log"),
+            "should label middleware's host import as log, got:\n{out}"
         );
     }
 }

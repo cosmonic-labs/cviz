@@ -1,0 +1,16 @@
+---
+source: src/lib/snapshot_tests.rs
+expression: "ascii_snap(&chain_plus_utility_graph(), &GraphRenderOpts::default(), false)"
+---
+╞══ handler ════════════════════════════════════════
+
+                ┌────────────┐             ┌─────┐
+ ext:handler ──▶│ middleware │───handler──▶│ srv │
+                └────────────┘             └─────┘
+
+
+╞══ log ════════════════════════════════════════
+
+            ┌────────┐
+ ext:log ──▶│ logger │
+            └────────┘

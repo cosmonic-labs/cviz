@@ -1,0 +1,9 @@
+---
+source: src/lib/snapshot_tests.rs
+expression: "ascii_snap(&chain_plus_utility_graph(), &chain_only(), false)"
+---
+╞══ handler ════════════════════════════════════════
+
+                ┌────────────┐             ┌─────┐
+ ext:handler ──▶│ middleware │───handler──▶│ srv │
+                └────────────┘             └─────┘

@@ -1,5 +1,5 @@
 /// Snapshot (golden-file) tests for the full rendered output of every
-/// `(graph_builder × format × detail_level)` combination.
+/// `(graph_builder × format × opts)` combination.
 ///
 /// Snapshots live in `src/lib/snapshots/` and are managed by the `insta`
 /// crate.  To review and accept new or changed snapshots run:
@@ -12,15 +12,30 @@
 #[cfg(test)]
 mod tests {
     use crate::model::CompositionGraph;
-    use crate::output::{ascii, mermaid, DetailLevel, Direction};
+    use crate::output::graph::{generate_graph_ascii, GraphRenderOpts};
+    use crate::output::{mermaid, Direction};
     use crate::test_utils::*;
 
-    fn ascii_snap(graph: &CompositionGraph, detail: DetailLevel, show_types: bool) -> String {
-        ascii::generate_ascii(graph, detail, show_types)
+    fn ascii_snap(graph: &CompositionGraph, opts: &GraphRenderOpts, show_types: bool) -> String {
+        generate_graph_ascii(graph, opts, show_types, None, None, false).ascii
     }
 
-    fn mermaid_snap(graph: &CompositionGraph, detail: DetailLevel, show_types: bool) -> String {
-        mermaid::generate_mermaid(graph, detail, Direction::LeftToRight, show_types, None)
+    fn mermaid_snap(graph: &CompositionGraph, opts: &GraphRenderOpts, show_types: bool) -> String {
+        mermaid::generate_mermaid(graph, opts, Direction::LeftToRight, show_types, None)
+    }
+
+    fn chain_only() -> GraphRenderOpts {
+        GraphRenderOpts {
+            chain_only: true,
+            ..Default::default()
+        }
+    }
+
+    fn host_imports() -> GraphRenderOpts {
+        GraphRenderOpts {
+            show_host_imports: true,
+            ..Default::default()
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -28,53 +43,31 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn simple_chain_ascii_handler_chain() {
+    fn simple_chain_ascii_default() {
         insta::assert_snapshot!(ascii_snap(
             &simple_chain_graph(),
-            DetailLevel::HandlerChain,
+            &GraphRenderOpts::default(),
             false
         ));
     }
 
     #[test]
-    fn simple_chain_ascii_all_interfaces() {
-        insta::assert_snapshot!(ascii_snap(
-            &simple_chain_graph(),
-            DetailLevel::AllInterfaces,
-            false
-        ));
+    fn simple_chain_ascii_host_imports() {
+        insta::assert_snapshot!(ascii_snap(&simple_chain_graph(), &host_imports(), false));
     }
 
     #[test]
-    fn simple_chain_ascii_full() {
-        insta::assert_snapshot!(ascii_snap(&simple_chain_graph(), DetailLevel::Full, false));
-    }
-
-    #[test]
-    fn simple_chain_mermaid_handler_chain() {
+    fn simple_chain_mermaid_default() {
         insta::assert_snapshot!(mermaid_snap(
             &simple_chain_graph(),
-            DetailLevel::HandlerChain,
+            &GraphRenderOpts::default(),
             false
         ));
     }
 
     #[test]
-    fn simple_chain_mermaid_all_interfaces() {
-        insta::assert_snapshot!(mermaid_snap(
-            &simple_chain_graph(),
-            DetailLevel::AllInterfaces,
-            false
-        ));
-    }
-
-    #[test]
-    fn simple_chain_mermaid_full() {
-        insta::assert_snapshot!(mermaid_snap(
-            &simple_chain_graph(),
-            DetailLevel::Full,
-            false
-        ));
+    fn simple_chain_mermaid_host_imports() {
+        insta::assert_snapshot!(mermaid_snap(&simple_chain_graph(), &host_imports(), false));
     }
 
     // -----------------------------------------------------------------------
@@ -82,49 +75,21 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn two_chain_ascii_handler_chain() {
+    fn two_chain_ascii_default() {
         insta::assert_snapshot!(ascii_snap(
             &two_chain_graph(),
-            DetailLevel::HandlerChain,
+            &GraphRenderOpts::default(),
             false
         ));
     }
 
     #[test]
-    fn two_chain_ascii_all_interfaces() {
-        insta::assert_snapshot!(ascii_snap(
-            &two_chain_graph(),
-            DetailLevel::AllInterfaces,
-            false
-        ));
-    }
-
-    #[test]
-    fn two_chain_ascii_full() {
-        insta::assert_snapshot!(ascii_snap(&two_chain_graph(), DetailLevel::Full, false));
-    }
-
-    #[test]
-    fn two_chain_mermaid_handler_chain() {
+    fn two_chain_mermaid_default() {
         insta::assert_snapshot!(mermaid_snap(
             &two_chain_graph(),
-            DetailLevel::HandlerChain,
+            &GraphRenderOpts::default(),
             false
         ));
-    }
-
-    #[test]
-    fn two_chain_mermaid_all_interfaces() {
-        insta::assert_snapshot!(mermaid_snap(
-            &two_chain_graph(),
-            DetailLevel::AllInterfaces,
-            false
-        ));
-    }
-
-    #[test]
-    fn two_chain_mermaid_full() {
-        insta::assert_snapshot!(mermaid_snap(&two_chain_graph(), DetailLevel::Full, false));
     }
 
     // -----------------------------------------------------------------------
@@ -132,49 +97,21 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn long_chain_ascii_handler_chain() {
+    fn long_chain_ascii_default() {
         insta::assert_snapshot!(ascii_snap(
             &long_chain_graph(),
-            DetailLevel::HandlerChain,
+            &GraphRenderOpts::default(),
             false
         ));
     }
 
     #[test]
-    fn long_chain_ascii_all_interfaces() {
-        insta::assert_snapshot!(ascii_snap(
-            &long_chain_graph(),
-            DetailLevel::AllInterfaces,
-            false
-        ));
-    }
-
-    #[test]
-    fn long_chain_ascii_full() {
-        insta::assert_snapshot!(ascii_snap(&long_chain_graph(), DetailLevel::Full, false));
-    }
-
-    #[test]
-    fn long_chain_mermaid_handler_chain() {
+    fn long_chain_mermaid_default() {
         insta::assert_snapshot!(mermaid_snap(
             &long_chain_graph(),
-            DetailLevel::HandlerChain,
+            &GraphRenderOpts::default(),
             false
         ));
-    }
-
-    #[test]
-    fn long_chain_mermaid_all_interfaces() {
-        insta::assert_snapshot!(mermaid_snap(
-            &long_chain_graph(),
-            DetailLevel::AllInterfaces,
-            false
-        ));
-    }
-
-    #[test]
-    fn long_chain_mermaid_full() {
-        insta::assert_snapshot!(mermaid_snap(&long_chain_graph(), DetailLevel::Full, false));
     }
 
     // -----------------------------------------------------------------------
@@ -182,263 +119,117 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn chain_plus_utility_ascii_handler_chain() {
+    fn chain_plus_utility_ascii_default() {
         insta::assert_snapshot!(ascii_snap(
             &chain_plus_utility_graph(),
-            DetailLevel::HandlerChain,
+            &GraphRenderOpts::default(),
             false
         ));
     }
 
     #[test]
-    fn chain_plus_utility_ascii_all_interfaces() {
+    fn chain_plus_utility_ascii_chain_only() {
         insta::assert_snapshot!(ascii_snap(
             &chain_plus_utility_graph(),
-            DetailLevel::AllInterfaces,
+            &chain_only(),
             false
         ));
     }
 
     #[test]
-    fn chain_plus_utility_ascii_full() {
-        insta::assert_snapshot!(ascii_snap(
-            &chain_plus_utility_graph(),
-            DetailLevel::Full,
-            false
-        ));
-    }
-
-    #[test]
-    fn chain_plus_utility_mermaid_handler_chain() {
+    fn chain_plus_utility_mermaid_default() {
         insta::assert_snapshot!(mermaid_snap(
             &chain_plus_utility_graph(),
-            DetailLevel::HandlerChain,
+            &GraphRenderOpts::default(),
             false
         ));
     }
 
     #[test]
-    fn chain_plus_utility_mermaid_all_interfaces() {
+    fn chain_plus_utility_mermaid_chain_only() {
         insta::assert_snapshot!(mermaid_snap(
             &chain_plus_utility_graph(),
-            DetailLevel::AllInterfaces,
-            false
-        ));
-    }
-
-    #[test]
-    fn chain_plus_utility_mermaid_full() {
-        insta::assert_snapshot!(mermaid_snap(
-            &chain_plus_utility_graph(),
-            DetailLevel::Full,
+            &chain_only(),
             false
         ));
     }
 
     // -----------------------------------------------------------------------
-    // typed_chain_graph  (show_types=false and show_types=true)
+    // typed_chain_graph (show_types matrix)
     // -----------------------------------------------------------------------
 
     #[test]
-    fn typed_chain_ascii_handler_chain_no_types() {
+    fn typed_chain_ascii_default_no_types() {
         insta::assert_snapshot!(ascii_snap(
             &typed_chain_graph(),
-            DetailLevel::HandlerChain,
+            &GraphRenderOpts::default(),
             false
         ));
     }
 
     #[test]
-    fn typed_chain_ascii_handler_chain_with_types() {
+    fn typed_chain_ascii_default_with_types() {
         insta::assert_snapshot!(ascii_snap(
             &typed_chain_graph(),
-            DetailLevel::HandlerChain,
+            &GraphRenderOpts::default(),
             true
         ));
     }
 
     #[test]
-    fn typed_chain_ascii_all_interfaces_no_types() {
-        insta::assert_snapshot!(ascii_snap(
+    fn typed_chain_mermaid_default_no_types() {
+        insta::assert_snapshot!(mermaid_snap(
             &typed_chain_graph(),
-            DetailLevel::AllInterfaces,
+            &GraphRenderOpts::default(),
             false
         ));
     }
 
     #[test]
-    fn typed_chain_ascii_all_interfaces_with_types() {
-        insta::assert_snapshot!(ascii_snap(
+    fn typed_chain_mermaid_default_with_types() {
+        insta::assert_snapshot!(mermaid_snap(
             &typed_chain_graph(),
-            DetailLevel::AllInterfaces,
+            &GraphRenderOpts::default(),
             true
         ));
-    }
-
-    #[test]
-    fn typed_chain_ascii_full_no_types() {
-        insta::assert_snapshot!(ascii_snap(&typed_chain_graph(), DetailLevel::Full, false));
-    }
-
-    #[test]
-    fn typed_chain_ascii_full_with_types() {
-        insta::assert_snapshot!(ascii_snap(&typed_chain_graph(), DetailLevel::Full, true));
-    }
-
-    #[test]
-    fn typed_chain_mermaid_handler_chain_no_types() {
-        insta::assert_snapshot!(mermaid_snap(
-            &typed_chain_graph(),
-            DetailLevel::HandlerChain,
-            false
-        ));
-    }
-
-    #[test]
-    fn typed_chain_mermaid_handler_chain_with_types() {
-        insta::assert_snapshot!(mermaid_snap(
-            &typed_chain_graph(),
-            DetailLevel::HandlerChain,
-            true
-        ));
-    }
-
-    #[test]
-    fn typed_chain_mermaid_all_interfaces_no_types() {
-        insta::assert_snapshot!(mermaid_snap(
-            &typed_chain_graph(),
-            DetailLevel::AllInterfaces,
-            false
-        ));
-    }
-
-    #[test]
-    fn typed_chain_mermaid_all_interfaces_with_types() {
-        insta::assert_snapshot!(mermaid_snap(
-            &typed_chain_graph(),
-            DetailLevel::AllInterfaces,
-            true
-        ));
-    }
-
-    #[test]
-    fn typed_chain_mermaid_full_no_types() {
-        insta::assert_snapshot!(mermaid_snap(&typed_chain_graph(), DetailLevel::Full, false));
-    }
-
-    #[test]
-    fn typed_chain_mermaid_full_with_types() {
-        insta::assert_snapshot!(mermaid_snap(&typed_chain_graph(), DetailLevel::Full, true));
     }
 
     // -----------------------------------------------------------------------
-    // two_typed_chain_graph  (show_types=false and show_types=true)
+    // two_typed_chain_graph
     // -----------------------------------------------------------------------
 
     #[test]
-    fn two_typed_chain_ascii_handler_chain_no_types() {
+    fn two_typed_chain_ascii_default_no_types() {
         insta::assert_snapshot!(ascii_snap(
             &two_typed_chain_graph(),
-            DetailLevel::HandlerChain,
+            &GraphRenderOpts::default(),
             false
         ));
     }
 
     #[test]
-    fn two_typed_chain_ascii_handler_chain_with_types() {
+    fn two_typed_chain_ascii_default_with_types() {
         insta::assert_snapshot!(ascii_snap(
             &two_typed_chain_graph(),
-            DetailLevel::HandlerChain,
+            &GraphRenderOpts::default(),
             true
         ));
     }
 
     #[test]
-    fn two_typed_chain_ascii_all_interfaces_no_types() {
-        insta::assert_snapshot!(ascii_snap(
+    fn two_typed_chain_mermaid_default_no_types() {
+        insta::assert_snapshot!(mermaid_snap(
             &two_typed_chain_graph(),
-            DetailLevel::AllInterfaces,
+            &GraphRenderOpts::default(),
             false
         ));
     }
 
     #[test]
-    fn two_typed_chain_ascii_all_interfaces_with_types() {
-        insta::assert_snapshot!(ascii_snap(
-            &two_typed_chain_graph(),
-            DetailLevel::AllInterfaces,
-            true
-        ));
-    }
-
-    #[test]
-    fn two_typed_chain_ascii_full_no_types() {
-        insta::assert_snapshot!(ascii_snap(
-            &two_typed_chain_graph(),
-            DetailLevel::Full,
-            false
-        ));
-    }
-
-    #[test]
-    fn two_typed_chain_ascii_full_with_types() {
-        insta::assert_snapshot!(ascii_snap(
-            &two_typed_chain_graph(),
-            DetailLevel::Full,
-            true
-        ));
-    }
-
-    #[test]
-    fn two_typed_chain_mermaid_handler_chain_no_types() {
+    fn two_typed_chain_mermaid_default_with_types() {
         insta::assert_snapshot!(mermaid_snap(
             &two_typed_chain_graph(),
-            DetailLevel::HandlerChain,
-            false
-        ));
-    }
-
-    #[test]
-    fn two_typed_chain_mermaid_handler_chain_with_types() {
-        insta::assert_snapshot!(mermaid_snap(
-            &two_typed_chain_graph(),
-            DetailLevel::HandlerChain,
-            true
-        ));
-    }
-
-    #[test]
-    fn two_typed_chain_mermaid_all_interfaces_no_types() {
-        insta::assert_snapshot!(mermaid_snap(
-            &two_typed_chain_graph(),
-            DetailLevel::AllInterfaces,
-            false
-        ));
-    }
-
-    #[test]
-    fn two_typed_chain_mermaid_all_interfaces_with_types() {
-        insta::assert_snapshot!(mermaid_snap(
-            &two_typed_chain_graph(),
-            DetailLevel::AllInterfaces,
-            true
-        ));
-    }
-
-    #[test]
-    fn two_typed_chain_mermaid_full_no_types() {
-        insta::assert_snapshot!(mermaid_snap(
-            &two_typed_chain_graph(),
-            DetailLevel::Full,
-            false
-        ));
-    }
-
-    #[test]
-    fn two_typed_chain_mermaid_full_with_types() {
-        insta::assert_snapshot!(mermaid_snap(
-            &two_typed_chain_graph(),
-            DetailLevel::Full,
+            &GraphRenderOpts::default(),
             true
         ));
     }
