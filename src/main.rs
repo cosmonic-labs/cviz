@@ -26,49 +26,38 @@ struct Args {
     #[arg(short, long, default_value = "lr", value_enum)]
     direction: Direction,
 
-    /// Show only middleware-chain interfaces — those exported by the
-    /// composition AND re-imported by another component instance.
+    /// Show only chain interfaces (exported AND re-imported inter-component).
     #[arg(long = "chain-only", action = clap::ArgAction::SetTrue)]
     chain_only: bool,
 
-    /// Substring match on the fully-qualified interface name.  Applied
-    /// after `--chain-only`.  Useful for narrowing to one namespace
-    /// (e.g. `--filter wasi:http`).
+    /// Substring match on interface name. Applied after `--chain-only`.
     #[arg(long)]
     filter: Option<String>,
 
-    /// Render host imports as dashed branches into each importing node
-    /// (mermaid) or as a per-block "Host imports:" footer (ASCII).
+    /// Show host imports (dashed in mermaid, footer in ASCII).
     #[arg(long = "host-imports", action = clap::ArgAction::SetTrue)]
     host_imports: bool,
 
-    /// Hide WIT type information on interface connections.
+    /// Hide WIT type signatures on interface connections.
     #[arg(long = "no-types", action = clap::ArgAction::SetTrue)]
     no_types: bool,
 
-    /// Output file (stdout if not specified)
+    /// Output file (stdout if not specified).
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// Highlight a node or edge in the graph view.  Repeatable.  Format:
+    /// Highlight a node or edge. Repeatable.
     ///
-    ///   node:<id>[=<context>][>><color>]
-    ///   edge:<id>[=<context>][>><color>]
+    /// Format: `{node|edge}:<id>[=<context>][>><color>]`.
+    /// Colors: yellow (default), cyan, magenta, blue, orange, red, green, white.
     ///
     /// Examples:
     ///   --highlight node:srv
-    ///   --highlight 'node:srv=outdated'
-    ///   --highlight 'edge:wasi:http/handler@0.3.0::middleware->srv=drained>>orange'
-    ///
-    /// Colors: yellow (default), cyan, magenta, blue, orange, red,
-    /// green, white.  (Red and green together are confusable for ~5% of
-    /// readers — pick distinct hues when designing for a colorblind
-    /// audience.)
+    ///   --highlight 'node:srv=outdated>>orange'
     #[arg(long = "highlight", value_name = "SPEC", action = clap::ArgAction::Append)]
     highlight: Vec<String>,
 
-    /// Force ANSI color emission (otherwise auto-detected from the stdout
-    /// TTY).  Has no effect when `-o` is set or when the format isn't ASCII.
+    /// Force ANSI color (auto-detected by default). Only affects ASCII to stdout.
     #[arg(long, default_value = "auto")]
     color: ColorMode,
 }
