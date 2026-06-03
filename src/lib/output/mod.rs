@@ -245,6 +245,40 @@ impl std::str::FromStr for Direction {
     }
 }
 
+/// CLI knob for ANSI color emission on ASCII output.
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
+pub enum ColorMode {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+impl ColorMode {
+    /// Resolve to a concrete on/off.  When `self` is [`ColorMode::Auto`],
+    /// `auto_on` is returned — the caller decides what "auto" means.
+    pub fn resolve(self, auto_on: bool) -> bool {
+        match self {
+            ColorMode::Always => true,
+            ColorMode::Never => false,
+            ColorMode::Auto => auto_on,
+        }
+    }
+
+    /// Resolve for the CLI-default case: color when output is going to
+    /// a TTY stdout (and stays off when piped or redirected to a file).
+    pub fn resolve_for_stdout(self, to_file: bool) -> bool {
+        use std::io::IsTerminal;
+        self.resolve(!to_file && std::io::stdout().is_terminal())
+    }
+}
+
+/// Terminal column count, or `None` when not on a TTY.
+/// Convenience to specify max width of ascii rendering.
+pub fn terminal_columns() -> Option<usize> {
+    let (terminal_size::Width(w), _) = terminal_size::terminal_size()?;
+    (w > 0).then_some(w as usize)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
