@@ -6,7 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use cviz::output;
 use cviz::output::graph::GraphRenderOpts;
-use cviz::output::{Direction, OutputFormat};
+use cviz::output::{terminal_columns, ColorMode, Direction, OutputFormat};
 use cviz::{HighlightColor, Highlights, Selection};
 
 #[derive(Parser, Debug)]
@@ -62,14 +62,6 @@ struct Args {
     color: ColorMode,
 }
 
-#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
-enum ColorMode {
-    #[default]
-    Auto,
-    Always,
-    Never,
-}
-
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -91,14 +83,7 @@ fn main() -> Result<()> {
         Some(highlights)
     };
 
-    // ANSI color is meaningful only when ASCII output goes to a real TTY.
-    // Forced "always" still emits even when piping (useful for CI logs).
-    let use_color = match args.color {
-        ColorMode::Always => true,
-        ColorMode::Never => false,
-        ColorMode::Auto => args.output.is_none() && std::io::stdout().is_terminal(),
-    };
-
+    let use_color = args.color.resolve_for_stdout(args.output.is_some());
     let show_types = !args.no_types;
     let opts = GraphRenderOpts {
         chain_only: args.chain_only,
@@ -220,22 +205,6 @@ fn split_color_suffix(rest: &str) -> Result<(String, Option<HighlightColor>)> {
         }
         None => Ok((rest.to_string(), None)),
     }
-}
-
-/// Detect the terminal column count.  Prefers the OS ioctl (works even when
-/// `$COLUMNS` isn't exported into the child process, which is the default in
-/// most shells); falls back to `$COLUMNS` if the ioctl says we're not on a
-/// terminal (e.g. when piping output to a file).
-fn terminal_columns() -> Option<usize> {
-    if let Some((terminal_size::Width(w), _)) = terminal_size::terminal_size() {
-        if w > 0 {
-            return Some(w as usize);
-        }
-    }
-    std::env::var("COLUMNS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .filter(|&w| w > 0)
 }
 
 #[cfg(test)]
