@@ -1,0 +1,21 @@
+%%{init: {'flowchart': {'wrappingWidth': 2400}}}%%
+graph LR
+    classDef shared stroke-width:3px,stroke-dasharray:5 3
+
+    subgraph sg_wasi_http_handler_0_3_0["export: handler"]
+        n0["http-core"]
+        n1["http-auth"]
+        ext_wasi_http_handler_0_3_0(["ext: handler✦"]) --> n1
+        n1 -->|"handler✦"| n0
+    end
+
+    subgraph sg_wasi_keyvalue_store_0_1_0["export: store"]
+        n2["kv-store"]
+        n3["kv-cache"]
+        ext_wasi_keyvalue_store_0_1_0(["ext: store✧"]) --> n3
+        n3 -->|"store✧"| n2
+    end
+
+
+    key["<div style='text-align:left'>Signatures:<br/>✦ 'handle': () -&gt; ()<br/>✧ 'get': (string) -&gt; string</div>"]
+    style key fill:none,stroke:none,color:#888
