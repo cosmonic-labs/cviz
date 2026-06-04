@@ -657,6 +657,45 @@ const GUTTER_MIN: usize = 8;
 /// tell where one subtree ends and the next begins.
 const INTER_SUBTREE_GAP: usize = 2;
 
+/// Reorder a parent's child list so DFS placement keeps connected
+/// siblings adjacent.
+///
+/// When child A has an edge to sibling B, we want A's box and B's box
+/// to end up on adjacent rows so the A→B edge is short.  The simplest
+/// way: place the *target* (B) first — it lands on the parent's row —
+/// then the source (A) immediately after, one band below.  Putting the
+/// source first would instead put A's box on the parent's row and
+/// force the parent's other cross-edge (if any) through A's column,
+/// causing label / box overlap.
+///
+/// Sort key:
+///   1. descending in-degree from other siblings — sibling-edge
+///      *targets* come first (they anchor a row, leaving the second
+///      slot open for their callers)
+///   2. descending out-degree to other siblings — *sources* come next
+///      so they end up adjacent to their target on the row below
+///   3. ascending id, for deterministic snapshots
+fn topo_sort_siblings(children: &[u32], edges: &[Edge]) -> Vec<u32> {
+    let child_set: BTreeSet<u32> = children.iter().copied().collect();
+    let mut out_to_sibs: BTreeMap<u32, usize> = children.iter().map(|c| (*c, 0)).collect();
+    let mut in_from_sibs: BTreeMap<u32, usize> = children.iter().map(|c| (*c, 0)).collect();
+    for e in edges {
+        if e.from != e.to && child_set.contains(&e.from) && child_set.contains(&e.to) {
+            *out_to_sibs.entry(e.from).or_insert(0) += 1;
+            *in_from_sibs.entry(e.to).or_insert(0) += 1;
+        }
+    }
+    let mut sorted: Vec<u32> = children.to_vec();
+    sorted.sort_by_key(|c| {
+        (
+            std::cmp::Reverse(in_from_sibs.get(c).copied().unwrap_or(0)),
+            std::cmp::Reverse(out_to_sibs.get(c).copied().unwrap_or(0)),
+            *c,
+        )
+    });
+    sorted
+}
+
 /// DFS-place one subtree.  `cursor` is the y at which this subtree
 /// starts; returns the y just past its bottom.  Leaves land at `cursor`;
 /// parents align with their first child's row.  For DAGs, the first
@@ -789,6 +828,18 @@ fn geom(layout: &Layout, leading_pad: usize) -> Geom {
     let mut children_of: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for e in &layout.edges {
         children_of.entry(e.from).or_default().push(e.to);
+    }
+    // Planning pass: topologically sort each parent's children using
+    // edges among them as the partial order.  If sibling A has an edge
+    // to sibling B (e.g. service-comp's children include both
+    // logger-shapes-...-shapes-handles and shapes-handles-comp, and the
+    // former has an edge to the latter), this places A before B in the
+    // child list so DFS visits A first and adopts B as A's descendant,
+    // keeping B adjacent to A in the diagram instead of stranding them
+    // on rows 100+ apart.  Within a topological level, ties break by id
+    // for determinism.
+    for vec in children_of.values_mut() {
+        *vec = topo_sort_siblings(vec, &layout.edges);
     }
     let mut has_parent: BTreeSet<u32> = BTreeSet::new();
     for e in &layout.edges {
@@ -972,8 +1023,36 @@ fn render(
     for e in &sized.edges {
         by_target.entry(e.to).or_default().push(e);
     }
+    // Precompute fan-in arm bend columns keyed by (source_id, source_row).
+    // When a single-edge from the same (source, row) draws on the same
+    // row, its label needs to dodge this column — otherwise the fan-in
+    // corner (drawn unconditionally) lands inside the single-edge's
+    // label and corrupts it (e.g. `after,before` → `after,┘efore`).
+    let mut fan_in_obstacles: BTreeMap<(u32, usize), Vec<usize>> = BTreeMap::new();
+    for (to, group) in &by_target {
+        if group.len() < 2 {
+            continue;
+        }
+        let target_rank = rank_of(&sized, *to);
+        let bend_x = g.bend_x_left[target_rank];
+        for arm in group {
+            let from_mid = g.node_mid[&arm.from];
+            fan_in_obstacles
+                .entry((arm.from, from_mid))
+                .or_default()
+                .push(bend_x);
+        }
+    }
     for (to, group) in by_target {
-        draw_edge_group(&mut grid, &mut colors, &sized, &g, to, &group);
+        draw_edge_group(
+            &mut grid,
+            &mut colors,
+            &sized,
+            &g,
+            to,
+            &group,
+            &fan_in_obstacles,
+        );
     }
     for exp in &sized.exports {
         draw_export(&mut grid, &mut colors, &sized, &g, exp);
@@ -1149,6 +1228,7 @@ fn draw_box(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_edge_group(
     grid: &mut [Vec<char>],
     colors: &mut [Vec<Option<HighlightColor>>],
@@ -1156,6 +1236,7 @@ fn draw_edge_group(
     g: &Geom,
     to: u32,
     group: &[&Edge],
+    fan_in_obstacles: &BTreeMap<(u32, usize), Vec<usize>>,
 ) {
     let target_rank = rank_of(layout, to);
     let target_left = g.col_x[target_rank];
@@ -1176,6 +1257,23 @@ fn draw_edge_group(
             // a labeled horizontal edge.
             std::cmp::min(from_right + 3, bend_x)
         };
+        // When this single-edge is drawn on the same row as a fan-in
+        // arm from the same source, its label needs to land to the
+        // right of the fan-in's bend column.  Pick the largest such
+        // column that lies inside the label span — the label fits to
+        // the right of all earlier obstacles when shifted past the
+        // rightmost one.
+        let label_x0 = if from_mid == target_mid {
+            fan_in_obstacles.get(&(e.from, from_mid)).and_then(|cols| {
+                cols.iter()
+                    .copied()
+                    .filter(|&c| c > from_right + 1 && c < target_left - 1)
+                    .max()
+                    .map(|c| c + 1)
+            })
+        } else {
+            None
+        };
         draw_single_edge(
             grid,
             colors,
@@ -1184,8 +1282,7 @@ fn draw_edge_group(
             target_left - 1,
             target_mid,
             single_bend_x,
-            &e.rendered_label,
-            e.highlight,
+            LineOpts::new(&e.rendered_label, e.highlight).with_label_x0(label_x0),
         );
         return;
     }
@@ -1194,7 +1291,14 @@ fn draw_edge_group(
     arm_mids.sort();
     let top_arm = *arm_mids.first().unwrap();
     let bottom_arm = *arm_mids.last().unwrap();
-    for row in grid.iter_mut().take(bottom_arm + 1).skip(top_arm) {
+    // The trunk must reach both the topmost arm and the target row.
+    // When target sits above/below every arm (e.g. all arms share a
+    // single row and target is below them), extend the trunk so the
+    // line still terminates at target_mid instead of dangling at the
+    // last arm corner.
+    let trunk_top = top_arm.min(target_mid);
+    let trunk_bottom = bottom_arm.max(target_mid);
+    for row in grid.iter_mut().take(trunk_bottom + 1).skip(trunk_top) {
         if row[bend_x] == ' ' {
             row[bend_x] = '│';
         }
@@ -1214,18 +1318,40 @@ fn draw_edge_group(
             from_right + 1,
             from_mid,
             bend_x - 1,
-            &e.rendered_label,
-            e.highlight,
+            LineOpts::new(&e.rendered_label, e.highlight),
         );
-        if from_mid == target_mid {
-            grid[from_mid][bend_x] = '┼';
+        // When the source row IS the target row, the arm enters from
+        // the left and the line continues right toward the target.  The
+        // bend column also carries the trunk to the *other* arms; pick
+        // the glyph by where those other arms sit:
+        //   ┬  other arms only below   (target row is top of the trunk)
+        //   ┴  other arms only above   (target row is bottom of the trunk)
+        //   ┼  arms both above & below (target row is in the middle)
+        let glyph = if from_mid == target_mid {
+            let has_above = top_arm < target_mid;
+            let has_below = bottom_arm > target_mid;
+            match (has_above, has_below) {
+                (false, true) => '┬',
+                (true, false) => '┴',
+                _ => '┼',
+            }
         } else if from_mid == top_arm {
-            grid[from_mid][bend_x] = '┐';
+            '┐'
         } else if from_mid == bottom_arm {
-            grid[from_mid][bend_x] = '┘';
+            '┘'
         } else {
-            grid[from_mid][bend_x] = '┤';
-        }
+            '┤'
+        };
+        grid[from_mid][bend_x] = glyph;
+    }
+    // If the target row is outside the arm span (e.g. all arms share a
+    // single row above or below target), no arm wrote a junction at
+    // (bend_x, target_mid).  Add one explicitly so the trunk visibly
+    // turns toward the target instead of dangling.
+    if target_mid < top_arm {
+        grid[target_mid][bend_x] = '┌';
+    } else if target_mid > bottom_arm {
+        grid[target_mid][bend_x] = '└';
     }
     for cell in grid[target_mid]
         .iter_mut()
@@ -1250,18 +1376,25 @@ fn draw_single_edge(
     x1: usize,
     y1: usize,
     bend_x: usize,
-    label: &str,
-    highlight: Option<HighlightColor>,
+    opts: LineOpts<'_>,
 ) {
+    let highlight = opts.highlight;
     if y0 == y1 {
-        draw_horizontal(grid, colors, x0, y0, x1, label, highlight);
+        draw_horizontal(grid, colors, x0, y0, x1, opts);
         grid[y0][x1] = '▶';
         if let Some(c) = highlight {
             colors[y0][x1] = Some(c);
         }
         return;
     }
-    draw_horizontal(grid, colors, x0, y0, bend_x - 1, "", highlight);
+    draw_horizontal(
+        grid,
+        colors,
+        x0,
+        y0,
+        bend_x - 1,
+        LineOpts::new("", highlight),
+    );
 
     // Source-row corner — line came from the LEFT (the source-row dashes)
     // and turns DOWN (if y1 > y0) or UP (if y1 < y0).  When a sibling bent
@@ -1301,7 +1434,14 @@ fn draw_single_edge(
     }
 
     if bend_x + 1 < x1 {
-        draw_horizontal(grid, colors, bend_x + 1, y1, x1 - 1, label, highlight);
+        draw_horizontal(
+            grid,
+            colors,
+            bend_x + 1,
+            y1,
+            x1 - 1,
+            LineOpts::new(opts.label, highlight),
+        );
     }
     grid[y1][x1] = '▶';
     if let Some(c) = highlight {
@@ -1370,14 +1510,41 @@ fn merge_dirs(existing: char, new_dirs: u8) -> char {
     char_of(existing_dirs | new_dirs)
 }
 
+/// Label + highlight + optional label-anchor override, passed to
+/// [`draw_horizontal`].  When `label_x0` is set, the label is centered
+/// in `[label_x0, x1]` instead of the full fill range — used to dodge
+/// a fan-in bend column that sits inside the default centered
+/// position and would otherwise corrupt the label.  The fill `─` still
+/// spans the full range; only the label text shifts.
+#[derive(Clone, Copy)]
+struct LineOpts<'a> {
+    label: &'a str,
+    highlight: Option<HighlightColor>,
+    label_x0: Option<usize>,
+}
+
+impl<'a> LineOpts<'a> {
+    fn new(label: &'a str, highlight: Option<HighlightColor>) -> Self {
+        Self {
+            label,
+            highlight,
+            label_x0: None,
+        }
+    }
+
+    fn with_label_x0(mut self, x0: Option<usize>) -> Self {
+        self.label_x0 = x0;
+        self
+    }
+}
+
 fn draw_horizontal(
     grid: &mut [Vec<char>],
     colors: &mut [Vec<Option<HighlightColor>>],
     x0: usize,
     y: usize,
     x1: usize,
-    label: &str,
-    highlight: Option<HighlightColor>,
+    opts: LineOpts<'_>,
 ) {
     if x0 > x1 {
         return;
@@ -1386,19 +1553,20 @@ fn draw_horizontal(
         if grid[y][x] == ' ' {
             grid[y][x] = '─';
         }
-        if let Some(c) = highlight {
+        if let Some(c) = opts.highlight {
             colors[y][x] = Some(c);
         }
     }
-    let span = x1 - x0 + 1;
-    let label_chars: Vec<char> = label.chars().collect();
+    let label_x0 = opts.label_x0.unwrap_or(x0).max(x0).min(x1);
+    let span = x1 - label_x0 + 1;
+    let label_chars: Vec<char> = opts.label.chars().collect();
     if label_chars.is_empty() || label_chars.len() + 2 > span {
         return;
     }
-    let start = x0 + (span - label_chars.len()) / 2;
+    let start = label_x0 + (span - label_chars.len()) / 2;
     for (i, c) in label_chars.iter().enumerate() {
         grid[y][start + i] = *c;
-        if let Some(color) = highlight {
+        if let Some(color) = opts.highlight {
             colors[y][start + i] = Some(color);
         }
     }

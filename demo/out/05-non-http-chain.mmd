@@ -1,0 +1,14 @@
+%%{init: {'flowchart': {'wrappingWidth': 2400}}}%%
+graph LR
+    classDef shared stroke-width:3px,stroke-dasharray:5 3
+
+    subgraph sg_wasi_messaging_consumer_0_2_0["export: consumer"]
+        n0["consumer"]
+        n1["filter"]
+        ext_wasi_messaging_consumer_0_2_0(["ext: consumer✦"]) --> n1
+        n1 -->|"consumer✦"| n0
+    end
+
+
+    key["<div style='text-align:left'>Signatures:<br/>✦ 'consume': (string) -&gt; string</div>"]
+    style key fill:none,stroke:none,color:#888

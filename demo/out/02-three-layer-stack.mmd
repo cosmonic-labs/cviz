@@ -1,0 +1,16 @@
+%%{init: {'flowchart': {'wrappingWidth': 2400}}}%%
+graph LR
+    classDef shared stroke-width:3px,stroke-dasharray:5 3
+
+    subgraph sg_wasi_http_handler_0_3_0["export: handler"]
+        n0["core"]
+        n1["auth"]
+        n2["rate"]
+        ext_wasi_http_handler_0_3_0(["ext: handler✦"]) --> n2
+        n1 -->|"handler✦"| n0
+        n2 -->|"handler✦"| n1
+    end
+
+
+    key["<div style='text-align:left'>Signatures:<br/>✦ 'handle': () -&gt; ()</div>"]
+    style key fill:none,stroke:none,color:#888
