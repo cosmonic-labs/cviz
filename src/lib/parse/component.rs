@@ -29,7 +29,7 @@ use wirm::Component;
 pub fn parse_component_imports(buff: &[u8]) -> Result<Vec<(String, Option<String>)>> {
     use wirm::wasmparser::ComponentTypeRef;
 
-    let component = Component::parse(buff, false, false, false).expect("Unable to parse");
+    let component = Component::parse(buff, false, false).expect("Unable to parse");
     let mut arena = crate::model::TypeArena::default();
     let mut imports = Vec::new();
 
@@ -49,7 +49,7 @@ pub fn parse_component_imports(buff: &[u8]) -> Result<Vec<(String, Option<String
 
 /// Parse a WebAssembly component file and extract its composition graph
 pub fn parse_component(buff: &[u8]) -> Result<CompositionGraph> {
-    let component = Component::parse(buff, false, false, false).expect("Unable to parse");
+    let component = Component::parse(buff, false, false).expect("Unable to parse");
     let mut visitor = Visitor::new();
 
     walk_structural(&component, &mut visitor);
