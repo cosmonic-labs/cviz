@@ -97,6 +97,12 @@ struct Visitor {
     /// scope-independent identity lets us correctly correlate inner-scope shim
     /// instances across scope boundaries.
     inst_ptr_to_graph_id: HashMap<usize, u32>,
+    /// `component_num`s of the nested definitions currently being walked (innermost
+    /// last). No entry for the root, so `.last()` is the enclosing definition's number.
+    comp_num_stack: Vec<u32>,
+    /// Per component definition (`component_num`): exported interface → graph ID of the
+    /// inner instance that provides it.
+    nested_exports: HashMap<u32, HashMap<String, u32>>,
 }
 impl Visitor {
     pub fn new() -> Self {
@@ -106,9 +112,96 @@ impl Visitor {
             graph: CompositionGraph::new(),
             next_graph_id: 0,
             inst_ptr_to_graph_id: HashMap::new(),
+            comp_num_stack: Vec::new(),
+            nested_exports: HashMap::new(),
         }
     }
+
+    /// Point consumer edges (and exports) past subcomposition wrappers at the real inner
+    /// instance backing each exported interface, then drop the bypassed wrappers.
+    ///
+    /// A subcomposition is instantiated as a single wrapper node that only wires the
+    /// composition's imports; its real implementation lives inside the definition as a
+    /// separate island. Without this, an edge into the wrapper dead-ends and nested
+    /// edges are unreachable from any export.
+    fn collapse_subcompositions(&mut self) {
+        // Zero-import nodes are wit-component export shims (dead ends): a nested export
+        // resolving to one means a plain leaf component, not a composition to descend.
+        let dead_end: std::collections::HashSet<u32> = self
+            .graph
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.imports.is_empty())
+            .map(|(&id, _)| id)
+            .collect();
+        let comp_num_of: HashMap<u32, u32> = self
+            .graph
+            .nodes
+            .iter()
+            .map(|(&id, n)| (id, n.component_num))
+            .collect();
+
+        // Redirect every consumer edge past any wrappers to the real provider.
+        for node in self.graph.nodes.values_mut() {
+            for imp in node.imports.iter_mut() {
+                if imp.is_host_import {
+                    continue;
+                }
+                if let Some(src) = imp.source_instance {
+                    imp.source_instance = Some(resolve_provider(
+                        src,
+                        &imp.interface_name,
+                        &self.nested_exports,
+                        &comp_num_of,
+                        &dead_end,
+                    ));
+                }
+            }
+        }
+        // Same for top-level exports — a subcomposition can be an export source.
+        for (iface, info) in self.graph.component_exports.iter_mut() {
+            info.source_instance = resolve_provider(
+                info.source_instance,
+                iface,
+                &self.nested_exports,
+                &comp_num_of,
+                &dead_end,
+            );
+        }
+
+        // Drop wrappers (nodes forwarding some interface to a real inner instance) once
+        // redirecting has left them unreferenced; keep any still referenced for an
+        // interface they provide directly.
+        let wrappers: std::collections::HashSet<u32> = comp_num_of
+            .iter()
+            .filter(|(&id, &cnum)| {
+                self.nested_exports
+                    .get(&cnum)
+                    .is_some_and(|m| m.values().any(|&tgt| !dead_end.contains(&tgt) && tgt != id))
+            })
+            .map(|(&id, _)| id)
+            .collect();
+        let mut referenced: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for node in self.graph.nodes.values() {
+            for imp in &node.imports {
+                if !imp.is_host_import {
+                    if let Some(src) = imp.source_instance {
+                        referenced.insert(src);
+                    }
+                }
+            }
+        }
+        for info in self.graph.component_exports.values() {
+            referenced.insert(info.source_instance);
+        }
+        self.graph
+            .nodes
+            .retain(|id, _| !(wrappers.contains(id) && !referenced.contains(id)));
+    }
+
     pub fn postprocess(&mut self) {
+        // Before host-import marking, so it sees the redirected (real) edge targets.
+        self.collapse_subcompositions();
         // Mark host imports on the connections.
         // Any import whose source_instance is not a known graph node (or is None)
         // is provided by the host rather than another composed instance.
@@ -138,12 +231,15 @@ impl ComponentVisitor<'_> for Visitor {
         if let Some(outer) = self.comp_id_to_num.last_mut() {
             outer.insert(id, self.curr_comp_num);
         }
+        // This component definition's own number is the pre-increment value.
+        self.comp_num_stack.push(self.curr_comp_num);
         self.curr_comp_num += 1;
         self.comp_id_to_num.push(HashMap::new());
     }
 
     fn exit_component(&mut self, _: &VisitCtx, _: u32, _component: &Component) {
         self.comp_id_to_num.pop();
+        self.comp_num_stack.pop();
     }
 
     // Process component instances - ** this is where the composition wiring lives **
@@ -236,16 +332,25 @@ impl ComponentVisitor<'_> for Visitor {
         }
     }
     fn visit_comp_export(&mut self, cx: &VisitCtx, _: ItemKind, _: u32, export: &ComponentExport) {
-        // `component_exports` is documented as the root component's
-        // public surface, so only record exports emitted at the root
-        // level. `comp_id_to_num` is a stack: len == 1 inside the root
-        // component, >= 2 inside any nested component.
-        if self.comp_id_to_num.len() != 1 {
-            return;
-        }
-
         let export_name = export.name.0.to_string();
         let item = cx.resolve(&export.get_item_ref().ref_);
+
+        // `component_exports` is only the root's public surface (stack len == 1 at
+        // root, >= 2 when nested). For a nested export, record instead which inner
+        // instance backs the interface, for wrapper collapsing later.
+        if self.comp_id_to_num.len() != 1 {
+            if let Some(&container) = self.comp_num_stack.last() {
+                if let Some(inner_id) =
+                    resolve_export_to_graph_id(cx, item, &self.inst_ptr_to_graph_id)
+                {
+                    self.nested_exports
+                        .entry(container)
+                        .or_default()
+                        .insert(export_name, inner_id);
+                }
+            }
+            return;
+        }
 
         // Only track instance exports
         match item {
@@ -434,6 +539,49 @@ fn prim_to_val_type(p: PrimitiveValType) -> ValueType {
         PrimitiveValType::Char => ValueType::Char,
         PrimitiveValType::String => ValueType::String,
         PrimitiveValType::ErrorContext => ValueType::ErrorContext,
+    }
+}
+
+/// Walk `start` down through wrappers to the real instance providing `iface`: while the
+/// current node's component exports `iface` from a non-dead-end inner instance, descend.
+/// Returns `start` when it is already the terminal provider.
+fn resolve_provider(
+    start: u32,
+    iface: &str,
+    nested_exports: &HashMap<u32, HashMap<String, u32>>,
+    comp_num_of: &HashMap<u32, u32>,
+    dead_end: &std::collections::HashSet<u32>,
+) -> u32 {
+    let mut current = start;
+    // Bounded to guard against pathological/cyclic input.
+    for _ in 0..64 {
+        let Some(&cnum) = comp_num_of.get(&current) else {
+            break;
+        };
+        match nested_exports.get(&cnum).and_then(|m| m.get(iface)) {
+            Some(&next) if !dead_end.contains(&next) && next != current => current = next,
+            _ => break,
+        }
+    }
+    current
+}
+
+/// Follow an export item through any alias chain to the graph ID of the
+/// `ComponentInstance` it refers to, if that instance is a tracked node.
+fn resolve_export_to_graph_id(
+    cx: &VisitCtx,
+    item: ResolvedItem,
+    inst_ptr_to_graph_id: &HashMap<usize, u32>,
+) -> Option<u32> {
+    match item {
+        ResolvedItem::CompInst(_, inst) => inst_ptr_to_graph_id
+            .get(&(inst as *const ComponentInstance as usize))
+            .copied(),
+        ResolvedItem::Alias(_, alias) => {
+            let resolved = cx.resolve(&alias.get_item_ref().ref_);
+            resolve_export_to_graph_id(cx, resolved, inst_ptr_to_graph_id)
+        }
+        _ => None,
     }
 }
 
@@ -894,6 +1042,93 @@ mod tests {
         assert!(
             graph.get_node(src_b).is_some(),
             "source node for test:iface/b@0.1.0 must exist in graph"
+        );
+    }
+
+    /// Outer instantiates `B`, itself a composition wiring `C -> D` internally.
+    /// Regression: `B`'s wrapper must collapse so the `C -> D` edge is reachable from
+    /// the export, rather than stranded as a disconnected island.
+    #[test]
+    fn nested_subcomposition_surfaces_internal_edge() {
+        let wat = r#"(component
+            (component $B
+                (import "wasi:host/env@0.1.0" (instance $h (export "get" (func))))
+                ;; D: leaf provider of test:svc/d
+                (component $D
+                    (import "wasi:host/env@0.1.0" (instance $h (export "get" (func))))
+                    (alias export $h "get" (func $g))
+                    (instance $out (export "run" (func $g)))
+                    (export "test:svc/d@1.0.0" (instance $out))
+                )
+                ;; C: imports test:svc/d from D, exports test:svc/c
+                (component $C
+                    (import "test:svc/d@1.0.0" (instance $d (export "run" (func))))
+                    (alias export $d "run" (func $g))
+                    (instance $out (export "run" (func $g)))
+                    (export "test:svc/c@1.0.0" (instance $out))
+                )
+                (instance $d-inst (instantiate $D
+                    (with "wasi:host/env@0.1.0" (instance $h))
+                ))
+                (alias export $d-inst "test:svc/d@1.0.0" (instance $d-out))
+                (instance $c-inst (instantiate $C
+                    (with "test:svc/d@1.0.0" (instance $d-out))
+                ))
+                (alias export $c-inst "test:svc/c@1.0.0" (instance $c-out))
+                (export "test:svc/c@1.0.0" (instance $c-out))
+            )
+            (import "wasi:host/env@0.1.0" (instance $host (export "get" (func))))
+            (instance $b-inst (instantiate $B
+                (with "wasi:host/env@0.1.0" (instance $host))
+            ))
+            (alias export $b-inst "test:svc/c@1.0.0" (instance $b-out))
+            (export "test:svc/c@1.0.0" (instance $b-out))
+        )"#;
+        let bytes = wat::parse_str(wat).expect("failed to parse WAT");
+        let graph = parse_component(&bytes).expect("failed to parse component");
+
+        // Internal C -> D edge is present: some node imports test:svc/d from another.
+        let (c_id, cd) = graph
+            .nodes
+            .iter()
+            .flat_map(|(&id, n)| n.imports.iter().map(move |c| (id, c)))
+            .find(|(_, c)| is_connection_for(c, "test:svc/d") && !c.is_host_import)
+            .expect("expected an internal C -> D edge on test:svc/d");
+        let d_id = cd
+            .source_instance
+            .expect("C -> D edge should carry a source instance");
+        assert!(
+            graph.get_node(d_id).is_some(),
+            "D provider node must exist in the graph"
+        );
+
+        // Wrapper B is collapsed: the export resolves to real C, not the opaque wrapper.
+        let export = graph
+            .component_exports
+            .get("test:svc/c@1.0.0")
+            .expect("expected export for test:svc/c@1.0.0");
+        assert_eq!(
+            export.source_instance, c_id,
+            "export should resolve past wrapper B to the real C node that provides \
+             the internal C -> D edge"
+        );
+
+        // And the export subgraph reaches both C and D, including the C -> D edge.
+        let subgraphs = crate::compute_export_subgraphs(&graph);
+        let sg = subgraphs
+            .iter()
+            .find(|sg| sg.interface_name == "test:svc/c@1.0.0")
+            .expect("expected a subgraph for the test:svc/c export");
+        assert!(
+            sg.nodes.contains(&c_id) && sg.nodes.contains(&d_id),
+            "export subgraph should reach both C and D, got nodes {:?}",
+            sg.nodes
+        );
+        assert!(
+            sg.edges
+                .iter()
+                .any(|e| e.caller == c_id && e.provider == d_id),
+            "export subgraph should contain the internal C -> D edge"
         );
     }
 
