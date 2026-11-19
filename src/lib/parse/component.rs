@@ -35,7 +35,7 @@ pub fn parse_component_imports(buff: &[u8]) -> Result<Vec<(String, Option<String
 
     for import in component.imports.iter() {
         if let ComponentTypeRef::Instance(_) = import.ty {
-            let name = import.name.0.to_string();
+            let name = import.name.full_name().to_string();
             let fingerprint = component
                 .concretize_import(&name)
                 .and_then(|ct| concrete_to_interface_type(ct, &mut arena))
@@ -64,16 +64,16 @@ pub fn parse_component(buff: &[u8]) -> Result<CompositionGraph> {
         if export.kind != ComponentExternalKind::Instance {
             continue;
         }
-        let name = export.name.0;
+        let name = export.name.full_name().to_string();
         // Always try to fill/refill — later visits (outer components) may
         // produce more complete type information than earlier visits (nested).
         {
-            if let Some(ct) = component.concretize_export(name) {
+            if let Some(ct) = component.concretize_export(&name) {
                 if let Some(it) = concrete_to_interface_type(ct, &mut visitor.graph.arena) {
                     let source = visitor
                         .graph
                         .component_exports
-                        .get(name)
+                        .get(&name)
                         .map_or(SYNTHETIC_COMPONENT, |e| e.source_instance);
                     visitor.graph.add_export(name.to_string(), source, Some(it));
                 }
@@ -332,7 +332,7 @@ impl ComponentVisitor<'_> for Visitor {
         }
     }
     fn visit_comp_export(&mut self, cx: &VisitCtx, _: ItemKind, _: u32, export: &ComponentExport) {
-        let export_name = export.name.0.to_string();
+        let export_name = export.name.full_name().to_string();
         let item = cx.resolve(&export.get_item_ref().ref_);
 
         // `component_exports` is only the root's public surface (stack len == 1 at
